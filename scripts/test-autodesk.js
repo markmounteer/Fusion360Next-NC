@@ -16,6 +16,12 @@ function run(args, expected = 0) {
   assert.equal(result.status, expected, result.stdout + result.stderr);
   return result.stdout + result.stderr;
 }
+function interrogationDescription(cps) {
+  const nativeOutput = run(["--interrogate", cps]);
+  const jsonLine = nativeOutput.split(/\r?\n/).find(line => line.startsWith('{"interrogationRevision"'));
+  assert.ok(jsonLine, "Native engine did not return interrogation JSON");
+  return JSON.parse(jsonLine).longDescription;
+}
 try {
   const cps = path.join(root, "posts/next-nc.cps");
   const metadata = run(["--interrogate", cps]);
@@ -40,13 +46,32 @@ function syntheticOutput() {
 longDescription = syntheticOutput();
 `;
   fs.writeFileSync(runtime, fs.readFileSync(path.join(root, "src/next-nc.js"), "utf8") + driver);
-  const nativeOutput = run(["--interrogate", runtime]);
-  const jsonLine = nativeOutput.split(/\r?\n/).find(line => line.startsWith('{"interrogationRevision"'));
-  assert.ok(jsonLine, "Native engine did not return interrogation JSON");
-  const doc = parse(JSON.parse(jsonLine).longDescription);
+  const doc = parse(interrogationDescription(runtime));
   assert.equal(doc.all("MACHINING_TOOLPATH").length, 3);
   assert.equal(doc.all("CIRCLE").length, 1);
-  console.log("PASS: native Autodesk CPS interrogation and writer runtime (synthetic metadata harness).");
+  const diagnosticPost = path.join(temporary, "diagnostics.cps");
+  const diagnosticDriver = `
+function syntheticDiagnostic() {
+  var params = {"operation-comment": "Synthetic face", "operation:compensationType": "control"};
+  var t = {number: 7, getSpindleMode: function () { return SPINDLE_CONSTANT_SURFACE_SPEED; },
+    surfaceSpeed: 80000, maximumSpindleSpeed: 0, coolant: COOLANT_OFF};
+  var s = {hasParameter: function (name) { return Object.prototype.hasOwnProperty.call(params, name); },
+    getParameter: function (name) { return params[name]; }, getTool: function () { return t; },
+    getType: function () { return TYPE_TURNING; }, isMultiAxis: function () { return false; },
+    isOptional: function () { return false; }, hasAnyCycle: function () { return false; },
+    spindle: SPINDLE_PRIMARY, feedMode: FEED_PER_REVOLUTION,
+    workPlane: {forward: new Vector(0,0,1), right: new Vector(1,0,0)}};
+  return nextLabel(s, 1) + ": " + nextSectionIssues(s).join("\\n");
+}
+longDescription = syntheticDiagnostic();
+`;
+  fs.writeFileSync(diagnosticPost, fs.readFileSync(cps, "utf8") + diagnosticDriver);
+  const diagnosis = interrogationDescription(diagnosticPost);
+  assert.match(diagnosis, /Synthetic face.*section 2, tool T7/);
+  assert.match(diagnosis, /\[COMPENSATION\].*In control/);
+  assert.match(diagnosis, /Passes > Compensation Type > In computer/);
+  assert.match(diagnosis, /\[CSS_LIMIT\]/);
+  console.log("PASS: native Autodesk CPS interrogation, writer and diagnosis helpers (synthetic metadata harness).");
   console.log("Not tested: Fusion GUI posting or controller execution.");
 } finally {
   // Verify the exact mkdtemp directory remains within the intended temporary parent.

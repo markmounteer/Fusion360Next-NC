@@ -35,6 +35,14 @@ The initial post rejects canned cycles, threading/tapping, controller cutter com
 
 The post buffers the program until it is accepted, so memory use grows with toolpath size. Geometry is a toolpath, not a reconstruction of Fusion's design, stock, fixtures or feature-based machining intent.
 
+## Precheck and diagnostics
+
+Version **0.1.1** checks every selected section before processing motion. It lists affected operation names, section numbers and tools together, with instructions to correct unsupported compensation, cycles, work planes, section types, feed modes, spindle settings and coolant. No extra post options are needed.
+
+For example, **In control**, **Wear** or **Inverse wear** compensation produces a diagnostic directing you to **Edit operation → Passes → Compensation Type → In computer**, then regenerate and repost. The post does not change the Fusion job or remove compensation automatically.
+
+If Fusion omits compensation metadata, the precheck cannot determine that setting. The runtime guard remains active and explains the detected compensation request, the operation involved and why the early check could not catch it. See [troubleshooting](docs/troubleshooting.md) for an example and the limits of prechecking.
+
 ## Library
 
 Requires Node.js 20 or later for development, with no npm dependencies.

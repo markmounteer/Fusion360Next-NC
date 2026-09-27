@@ -59,6 +59,8 @@ A section starts at its recorded entry point. No motion connects the previous se
 
 ## Errors and limitations
 
+The CPS first prechecks every selected section's metadata and reports all affected operations together. Missing compensation metadata is not treated as proof of In computer; runtime validation still rejects controller-side compensation. See [diagnostics](troubleshooting.md).
+
 The CPS buffers everything and writes only from `onClose` after successful serialization. A caught validation failure latches a failed state. A host may still create an empty or `.failed` output; only a complete, successfully posted document is an export. Buffering uses O(number of vertices) memory; large-job limits have not been benchmarked.
 
 The program has no stock B-rep, part B-rep, fixtures, geometric tool assembly, feed optimization or feature-level toolpath generation. It does not promise smaller files than G-code: STEP entities are verbose, although adjacent lines and common technology records are shared. Better runtime efficiency would require measured changes to CAM toolpaths or controller planning, not a file-format change alone.
