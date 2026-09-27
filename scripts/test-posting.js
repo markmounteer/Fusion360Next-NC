@@ -15,6 +15,7 @@ const commit = "c95cce0a6e9f5f48e163a7e6d26a9d005fde85e5";
 const cache = path.join(root, ".cache", "autodesk", commit);
 const cases = [
   ["face", "decb11eef33e02d0a6928d99f78380c6af20df2e96983c77043a5ac2065fc12a"],
+  ["profile no compensation", "db1cd6082845e2bcf0c53b37cf92527ff69309fb3b51e1fd6ed2fbea310198fc"],
   ["profile with compensation", "22610053be4759494b659675a297b948f798cfa869347fd960ab509128dd031a"]
 ];
 async function main() {
@@ -52,6 +53,21 @@ async function main() {
     assert.match(good.log, /Post processing completed successfully/);
     assert.match(good.log, /NEXTNC OUTPUT WRITTEN/);
     assert.ok(parse(good.output).all("MACHINING_TOOLPATH").length > 0);
+    const oldArc = post("bad-arc-flag", source + '\nnextBoolean = function (value) { return value; };\n', "profile no compensation", 500);
+    assert.match(oldArc.log, /arc direction must be explicit/);
+    // Trace native callback types and senses without modifying them.
+    const arcTrace = '\nvar originalCircular = onCircular; onCircular = function () { log("TEST ARC FLAG " + typeof arguments[0] + " " + arguments[0]); originalCircular.apply(this, arguments); };\n';
+    const profile = post("profile", source + arcTrace, "profile no compensation", 0);
+    assert.match(profile.log, /TEST ARC FLAG number 0/);
+    assert.match(profile.log, /NEXTNC ARC LINEARIZED/);
+    assert.match(profile.log, /Post processing completed successfully/);
+    const profileDoc = parse(profile.output);
+    assert.ok(profileDoc.all("CIRCLE").length > 0);
+    assert.ok(profileDoc.all("TRIMMED_CURVE").some(e => e.args[4].symbol === ".T."));
+    assert.ok(profileDoc.all("TRIMMED_CURVE").every(e => e.args[4].symbol === ".T."));
+    const arcCount = (profile.log.match(/TEST ARC FLAG number 0/g) || []).length;
+    const linearizedCount = (profile.log.match(/NEXTNC ARC LINEARIZED/g) || []).length;
+    assert.equal(profileDoc.all("CIRCLE").length, arcCount - linearizedCount);
     const rejected = post("compensation", source, "profile with compensation", 500);
     assert.match(rejected.log, /\[COMPENSATION\]/);
     const report = JSON.parse(rejected.log.match(/NEXTNC DIAGNOSTIC BEGIN\r?\n([\s\S]*?)\r?\nNEXTNC DIAGNOSTIC END/)[1]);
@@ -63,7 +79,7 @@ async function main() {
     assert.match(runtime.log, /NEXTNC DIAGNOSTIC BEGIN/);
     assert.match(runtime.log, /onRadiusCompensation/);
     assert.doesNotMatch(runtime.output, /END-ISO-10303-21/);
-    console.log("PASS: actual Autodesk posting: incompatible-version regression, successful facing, compensation precheck and runtime diagnostic.");
+    console.log("PASS: actual Autodesk posting: version and numeric-arc regressions, successful facing/profile with native CCW arcs, bounded arc linearization, compensation precheck/runtime diagnostics.");
     console.log("Fixtures: Autodesk sample turning files; not the user's Fusion job, GUI, or a machine test.");
   } finally {
     assert.equal(path.dirname(temporary), path.resolve(os.tmpdir()));

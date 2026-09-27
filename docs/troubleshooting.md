@@ -1,5 +1,13 @@
 # Posting diagnostics
 
+## Arc direction error in 0.1.2
+
+`Next-NC: arc direction must be explicit` during `onCircular` can be caused by a post adapter bug, not an operation setting. Autodesk engine 5.413.5 supplies the clockwise callback argument as numeric `0` for counterclockwise (the API documents a Boolean). The writer requires an explicit JavaScript Boolean. Version **0.1.3** converts only `0`/`1` and `false`/`true` at the Fusion boundary, including the full-circle flag. Unknown, missing and string values still fail with the received value and type. The independent writer's Boolean validation remains strict.
+
+Import the updated CPS and repost. No compensation, feed or geometry setting needs changing for this error. The saved diagnostic's final `onCircular` event retains the original argument, so `0` remains visible as evidence rather than being hidden by normalization. The native posting suite reproduces the old failure with Autodesk's profile sample and checks the corrected complete output. Synthetic tests additionally check clockwise direction and full circles.
+
+The same sample exposed tiny endpoint-radius differences in the engine's arc coordinates. In 0.1.3, partial arcs rejected by the writer's radius consistency check may be linearized by Fusion if the mismatch fits within the post's existing 0.002 mm tolerance (or a tighter supplied operation tolerance). The mismatch is deducted from the tolerance passed to the native linearizer. The post verifies that the generated motion reaches the supplied endpoint and logs each fallback as `NEXTNC ARC LINEARIZED`. Invalid flags, invalid geometry, full-circle inconsistencies, excessive mismatch or unavailable linearization still stop export. There is no extra post property and the post does not invent a replacement center.
+
 ## Engine compatibility error in 0.1.1
 
 `Post configuration is not compatible with this version of the post processor engine` can occur before any callback, including `onOpen`, runs. Version 0.1.1 accidentally set Autodesk's reserved `version` global to the project release (`0.1.1`). Version 0.1.2 restores **`version = "1.0"`**; the project release remains separately available as `NextNC.version`. Autodesk [documents this field as the configuration version](https://cam.autodesk.com/posts/reference/classPostProcessor.html), not the release number.

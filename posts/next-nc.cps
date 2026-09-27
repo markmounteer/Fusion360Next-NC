@@ -4,7 +4,7 @@
  */
 var NextNC = (function () {
   "use strict";
-  var VERSION = "0.1.2";
+  var VERSION = "0.1.3";
   var PROFILE = "next-nc/turning-toolpath/0.1";
   function requireValue(ok, message) { if (!ok) { throw new Error("Next-NC: " + message); } }
   function finite(n, label) {
@@ -78,7 +78,12 @@ var NextNC = (function () {
     end = point(end); center = point(center); f = feed(f);
     requireValue(typeof clockwise === "boolean", "arc direction must be explicit");
     var radius = positive(distance(this.position, center), "arc radius");
-    requireValue(Math.abs(distance(end, center) - radius) <= Math.max(1e-7, radius * 1e-6), "arc endpoints have different radii");
+    var radialDifference = Math.abs(distance(end, center) - radius);
+    if (radialDifference > Math.max(1e-7, radius * 1e-6)) {
+      var arcError = new Error("Next-NC: arc endpoints have different radii");
+      arcError.code = "ARC_RADII"; arcError.radialDifference = radialDifference;
+      throw arcError;
+    }
     requireValue(fullCircle ? same(this.position, end) : !same(this.position, end), "full-circle flag must match arc endpoints");
     this.append({kind: "arc", start: this.position, end: end, center: center, radius: radius,
       clockwise: clockwise, fullCircle: !!fullCircle}, f);
@@ -314,6 +319,7 @@ var nextRecentEvents = [];
 var nextEventCount = 0;
 var nextStartedUTC = "";
 var nextSectionDiagnostics = [];
+var nextLinearizedArcs = 0;
 
 // Use the engine log: direct file access is restricted by Fusion's security
 // level, and no callback can run when the engine rejects the global script.
@@ -334,7 +340,8 @@ function nextContext() {
     configurationPath: nextRead(function () { return getConfigurationPath(); }),
     outputPath: nextRead(function () { return getOutputPath(); }),
     program: nextRead(function () { return programName; }), units: unit === MM ? "mm" : "inch",
-    startedUTC: nextStartedUTC, sectionCount: nextRead(function () { return getNumberOfSections(); })
+    startedUTC: nextStartedUTC, sectionCount: nextRead(function () { return getNumberOfSections(); }),
+    linearizedArcCount: nextLinearizedArcs
   };
 }
 function nextSnapshot(section, index, issues) {
@@ -469,6 +476,24 @@ function nextReject(message) {
   nextFail(new Error("Next-NC: " + (nextOperationLabel ? nextOperationLabel + ": " : "") + message));
 }
 function nextPoint(p) { return [p.x, p.y, p.z]; }
+function nextBoolean(value, label) {
+  // Native callbacks can supply numeric flags even though the API says Boolean.
+  // Normalize only the explicit 0/1 encodings; truthiness would hide bad input.
+  if (value === true || value === 1) { return true; }
+  if (value === false || value === 0) { return false; }
+  throw new Error("Next-NC: " + label + " must be true/false or numeric 0/1; received " +
+    nextDiagnosticText(value) + " (" + typeof value + ").");
+}
+function nextArcTolerance() {
+  // Fusion owns the machining tolerance. Never loosen a tighter operation value.
+  var limit = tolerance;
+  if (hasParameter("operation:tolerance")) {
+    var operationTolerance = getParameter("operation:tolerance");
+    if (!nextPositive(operationTolerance)) { throw new Error("Next-NC: invalid Fusion operation tolerance for arc linearization."); }
+    limit = Math.min(limit, operationTolerance);
+  }
+  return limit;
+}
 function nextFeed(value) { return {value: value, mode: nextFeedMode}; }
 function nextSetFeedMode(mode) {
   if (mode === FEED_PER_MINUTE) { nextFeedMode = "perMinute"; }
@@ -517,7 +542,26 @@ function onCircular(clockwise, cx, cy, cz, x, y, z, feed) {
   nextGuard(function () {
     nextNeedSection();
     if (getCircularPlane() !== PLANE_ZX || isHelical()) { throw new Error("Next-NC: only planar XZ arcs are supported."); }
-    nextSection.arc([x, y, z], [cx, cy, cz], clockwise, nextFeed(feed), isFullCircle());
+    clockwise = nextBoolean(clockwise, "Fusion onCircular clockwise flag");
+    var fullCircle = nextBoolean(isFullCircle(), "Fusion full-circle flag");
+    try { nextSection.arc([x, y, z], [cx, cy, cz], clockwise, nextFeed(feed), fullCircle); }
+    catch (e) {
+      if (e.code !== "ARC_RADII" || fullCircle) { throw e; }
+      var limit = nextArcTolerance(), remaining = limit - e.radialDifference;
+      if (!(remaining > 0) || !canLinearize()) {
+        throw new Error("Next-NC: arc endpoint radius difference " + e.radialDifference + " exceeds the available linearization budget " +
+          limit + " or Fusion cannot linearize this record. Review/regenerate this operation; no arc geometry was changed.");
+      }
+      // The strict writer has not appended the rejected arc or advanced position.
+      // Ask Fusion to generate the approximation; do not invent a new arc center.
+      linearize(remaining);
+      if (nextSection.position[0] !== x || nextSection.position[2] !== z) {
+        throw new Error("Next-NC: Fusion arc linearization did not reach the supplied endpoint; export stopped.");
+      }
+      ++nextLinearizedArcs;
+      nextLog("NEXTNC ARC LINEARIZED " + JSON.stringify({operation: nextOperationLabel,
+        record: getCurrentRecordId(), radialDifference: e.radialDifference, tolerance: remaining, units: unit === MM ? "mm" : "inch"}));
+    }
   });
 }
 function onDwell(seconds) { nextGuard(function () { nextNeedSection(); nextSection.dwell(seconds); }); }
@@ -563,7 +607,7 @@ function onClose() {
     var output = nextProgram.toSTEP().split("\n");
     for (var i = 0; i < output.length - 1; ++i) { writeln(output[i]); }
     nextLog("NEXTNC OUTPUT WRITTEN " + JSON.stringify({release: NextNC.version, callbacks: nextEventCount,
-      sections: getNumberOfSections(), lines: output.length - 1}));
+      sections: getNumberOfSections(), lines: output.length - 1, linearizedArcs: nextLinearizedArcs}));
   });
 }
 

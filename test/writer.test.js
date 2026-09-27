@@ -69,6 +69,13 @@ test("XZ arcs retain radius, endpoints, normal and both senses", () => {
     assert.deepEqual(doc.get(axis.args[2])[0].args[1], [0, 1, 0]);
   }
 });
+test("library arc directions remain strict Booleans; normalization belongs to the Fusion adapter", () => {
+  for (const direction of [0, 1, "false", undefined, null]) {
+    const {section} = sample({}, {start: [10, 0, 0]});
+    assert.throws(() => section.arc([8, 0, -2], [8, 0, 0], direction, f, false), /arc direction must be explicit/);
+    assert.equal(section.paths.length, 0);
+  }
+});
 test("full circles remain bounded curves and zero-length lines alone are omitted", () => {
   const {program, section} = sample({}, {start: [10, 0, 0]});
   section.linear([10, 0, 0], f);

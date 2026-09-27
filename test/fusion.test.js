@@ -102,6 +102,71 @@ test("Fusion CSS speed remains length/minute and is not incorrectly scaled twice
   const doc = parse(output.join("\n") + "\n");
   assert.ok(doc.all("MEASURE_REPRESENTATION_ITEM").some(e => e.args[0] === "surface speed" && e.args[1].args[0] === -80000));
 });
+test("Fusion numeric and Boolean arc directions retain both STEP senses", () => {
+  for (const [flag, clockwise] of [[0, false], [1, true], [false, false], [true, true]]) {
+    const {c, output} = engine(); c.onOpen(); c.onSection(); c.onRapid(10, 0, 0);
+    c.onCircular(flag, 8, 0, 0, 8, 0, -2, 0.1);
+    assert.equal(c.nextSection.paths.at(-1).clockwise, clockwise);
+    c.onClose(); const doc = parse(output.join("\n") + "\n");
+    assert.equal(doc.all("CIRCLE")[0].args[2], 2);
+    assert.equal(doc.all("TRIMMED_CURVE")[0].args[4].symbol, clockwise ? ".F." : ".T.");
+  }
+});
+test("Fusion numeric full-circle flags preserve complete circles", () => {
+  for (const flag of [0, 1]) {
+    const {c, output} = engine({isFullCircle: () => 1}); c.onOpen(); c.onSection(); c.onRapid(10, 0, 0);
+    c.onCircular(flag, 8, 0, 0, 10, 0, 0, 0.1); c.onClose();
+    const curve = parse(output.join("\n") + "\n").all("TRIMMED_CURVE")[0];
+    assert.equal(curve.args[3][0].args[0], 2 * Math.PI);
+    assert.equal(curve.args[4].symbol, flag ? ".F." : ".T.");
+  }
+  const {c, output} = engine({isFullCircle: () => 0}); c.onOpen(); c.onSection(); c.onRapid(10, 0, 0);
+  c.onCircular(0, 8, 0, 0, 8, 0, -2, 0.1); c.onClose();
+  assert.equal(parse(output.join("\n") + "\n").all("TRIMMED_CURVE")[0].args[5].symbol, ".CARTESIAN.");
+});
+test("invalid Fusion arc flags fail explicitly without a completed program", () => {
+  for (const value of [undefined, null, -1, 2, "0", "1", "false", NaN, {}]) {
+    for (const field of ["clockwise", "full-circle"]) {
+      const {c, output, logs} = engine(field === "full-circle" ? {isFullCircle: () => value} : {});
+      c.onOpen(); c.onSection(); c.onRapid(10, 0, 0);
+      assert.throws(() => c.onCircular(field === "clockwise" ? value : 0, 8, 0, 0, 8, 0, -2, 0.1), /must be true\/false or numeric 0\/1/);
+      assert.equal(failureReport(logs).callback, "onCircular");
+      assert.throws(() => c.onClose(), /already failed/); assert.equal(output.length, 0);
+    }
+  }
+});
+test("rounding mismatch delegates to Fusion with the tighter remaining tolerance in mm and inches", () => {
+  for (const scale of [1, 1 / 25.4]) {
+    const {c, output, logs} = engine({spatial: n => n * scale});
+    if (scale !== 1) c.unit = c.IN;
+    const end = [8, 0, -2.00001 * scale];
+    c.currentSection.parameters["operation:tolerance"] = 0.001 * scale;
+    let usedTolerance;
+    c.canLinearize = () => true;
+    c.linearize = requested => { usedTolerance = requested; c.onLinear(...end, 0.1); };
+    c.onOpen(); c.onSection(); c.onRapid(8 + 2 * scale, 0, 0);
+    c.onCircular(0, 8, 0, 0, ...end, 0.1);
+    assert.ok(usedTolerance > 0 && usedTolerance < 0.001 * scale);
+    assert.ok(Math.abs(usedTolerance - 0.00099 * scale) < 1e-12);
+    assert.equal(c.nextLinearizedArcs, 1); assert.ok(logs.some(s => s.startsWith("NEXTNC ARC LINEARIZED ")));
+    assert.equal(c.nextSection.paths.at(-1).feed.value, 0.1);
+    assert.deepEqual(Array.from(c.nextSection.position), end);
+    c.onClose(); assert.equal(parse(output.join("\n") + "\n").all("CIRCLE").length, 0);
+  }
+});
+test("arc fallback rejects excessive mismatch, unavailable linearization, and invalid operation tolerance", () => {
+  for (const scenario of ["large mismatch", "tight operation", "unavailable", "invalid tolerance", "missing endpoint"]) {
+    const {c, output} = engine(); let invoked = false;
+    c.canLinearize = () => scenario !== "unavailable";
+    c.linearize = () => { invoked = true; };
+    if (scenario === "tight operation") c.currentSection.parameters["operation:tolerance"] = 0.0000001;
+    if (scenario === "invalid tolerance") c.currentSection.parameters["operation:tolerance"] = 0;
+    c.onOpen(); c.onSection(); c.onRapid(10, 0, 0);
+    assert.throws(() => c.onCircular(0, 8, 0, 0, 8, 0, scenario === "large mismatch" ? -3 : -2.00001, 0.1), /linearization|linearize/);
+    assert.equal(invoked, scenario === "missing endpoint"); assert.equal(c.nextLinearizedArcs, 0);
+    assert.throws(() => c.onClose(), /already failed/); assert.equal(output.length, 0);
+  }
+});
 test("work offsets and tools survive multiple sections without manufactured connecting moves", () => {
   const {c, output} = engine(); c.onOpen(); c.onSection(); c.onLinear(12, 0, 0, 0.1); c.onSectionEnd();
   c.tool.number = 3; c.tool.compensationOffset = 4; c.currentSection.workOffset = 2;

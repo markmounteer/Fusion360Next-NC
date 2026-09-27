@@ -3,7 +3,7 @@
  */
 var NextNC = (function () {
   "use strict";
-  var VERSION = "0.1.2";
+  var VERSION = "0.1.3";
   var PROFILE = "next-nc/turning-toolpath/0.1";
   function requireValue(ok, message) { if (!ok) { throw new Error("Next-NC: " + message); } }
   function finite(n, label) {
@@ -77,7 +77,12 @@ var NextNC = (function () {
     end = point(end); center = point(center); f = feed(f);
     requireValue(typeof clockwise === "boolean", "arc direction must be explicit");
     var radius = positive(distance(this.position, center), "arc radius");
-    requireValue(Math.abs(distance(end, center) - radius) <= Math.max(1e-7, radius * 1e-6), "arc endpoints have different radii");
+    var radialDifference = Math.abs(distance(end, center) - radius);
+    if (radialDifference > Math.max(1e-7, radius * 1e-6)) {
+      var arcError = new Error("Next-NC: arc endpoints have different radii");
+      arcError.code = "ARC_RADII"; arcError.radialDifference = radialDifference;
+      throw arcError;
+    }
     requireValue(fullCircle ? same(this.position, end) : !same(this.position, end), "full-circle flag must match arc endpoints");
     this.append({kind: "arc", start: this.position, end: end, center: center, radius: radius,
       clockwise: clockwise, fullCircle: !!fullCircle}, f);

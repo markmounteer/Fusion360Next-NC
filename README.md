@@ -17,6 +17,8 @@ Download [posts/next-nc.cps](posts/next-nc.cps). It is a standalone file; Node.j
 
 See Autodesk's [Post Library instructions](https://help.autodesk.com/cloudhelp/ENU/Fusion-CAM/files/MFG-ADD-POST-PROCESSOR-TO-LIBRARY.htm).
 
+**0.1.3 fixes `arc direction must be explicit`.** Fusion's native numeric arc flags (`0`/`1`) are normalized at the adapter boundary, preserving both directions. It also handles small endpoint-radius rounding differences through Fusion's own tolerance-bounded linearization. Update the imported CPS; the existing Windows diagnostic collector does not need reinstalling.
+
 ## What it exports
 
 | Supported | Details |
@@ -81,7 +83,7 @@ The [synthetic example](examples/turning.stpnc), [format contract](docs/format.m
 
 Edit `src/next-nc.js` and `src/fusion-adapter.js`, then run `npm run build`. Commit the generated `posts/next-nc.cps` too. CI checks that the source and post match, runs tests on Node 20/22/24, and checks the reproducible example.
 
-To exercise the writer in Autodesk's installed JavaScript runtime, set `AUTODESK_POST` to your `post.exe` and run `npm run test:autodesk`. Run `npm run test:posting` for actual engine posting against checksum-pinned Autodesk sample turning inputs (downloaded to `.cache`, not redistributed). This verifies the compatibility gate, successful facing output, and precheck/runtime rejection. `npm run test:collector` checks the Windows log collector. These do not test the Fusion GUI or a machine.
+To exercise the writer in Autodesk's installed JavaScript runtime, set `AUTODESK_POST` to your `post.exe` and run `npm run test:autodesk`. Run `npm run test:posting` for actual engine posting against checksum-pinned Autodesk sample turning inputs (downloaded to `.cache`, not redistributed). This verifies the compatibility gate, numeric arc flags, successful facing/profile output, arc rounding fallback, and precheck/runtime rejection. `npm run test:collector` checks the Windows log collector. These do not test the Fusion GUI or a machine.
 
 ## License and provenance
 

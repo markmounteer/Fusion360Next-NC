@@ -31,7 +31,7 @@ Only an unrotated work plane is accepted: right is +X, forward is +Z. Secondary-
 
 Arc axes are +Y, the normal of the ZX plane. `sense_agreement=.T.` means counterclockwise about +Y; `.F.` means clockwise. Endpoints specify partial-arc trims. Full circles use parameter trims 0 and 2π so that the resulting curve is bounded and retains a full revolution. Helices and spirals are not advertised by the CPS; the Autodesk kernel may linearize them before callbacks. Every callback point is still checked for Y=0.
 
-Consecutive rapid or linear moves with identical feed, spindle and coolant state share a polyline. Every vertex remains present. Arcs remain analytic. Compaction does not authorize blending, removal of clearance moves, faster feeds, path reordering or altered machining tolerances. A polyline is not an instruction to stop at each vertex; path planning remains the consumer's job.
+Consecutive rapid or linear moves with identical feed, spindle and coolant state share a polyline. Every vertex remains present. Consistent arcs remain analytic. Since 0.1.3, a partial arc whose endpoint radii differ beyond the writer's numerical threshold can use Fusion's native linearizer, bounded by the existing post tolerance (0.002 mm) or a tighter supplied operation tolerance, with the radial mismatch deducted from that budget. Larger inconsistencies are rejected; generated endpoints must match the supplied endpoint. The log records these fallbacks and their tolerance. Compaction does not authorize blending, removal of clearance moves, faster feeds, path reordering or looser machining tolerances. A polyline is not an instruction to stop at each vertex; path planning remains the consumer's job.
 
 ## Feeds and spindle
 
