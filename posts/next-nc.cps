@@ -4,7 +4,7 @@
  */
 var NextNC = (function () {
   "use strict";
-  var VERSION = "0.1.1";
+  var VERSION = "0.1.2";
   var PROFILE = "next-nc/turning-toolpath/0.1";
   function requireValue(ok, message) { if (!ok) { throw new Error("Next-NC: " + message); } }
   function finite(n, label) {
@@ -285,11 +285,12 @@ description = "Next-NC - experimental AP238 XZ turning";
 vendor = "Fusion360Next-NC";
 vendorUrl = "https://github.com/markmounteer/Fusion360Next-NC";
 legal = "Copyright (c) 2026 Mark Mounteer. MIT License.";
-version = NextNC.version;
+// Autodesk's configuration format version, NOT the Next-NC release number.
+version = "1.0";
 certificationLevel = 0;
 minimumRevision = 45917;
 extension = "stpnc";
-longDescription = "Experimental toolpath-level STEP-NC/AP238 exporter for single-spindle XZ turning. Requires a Next-NC-aware consumer; LinuxCNC cannot load this file directly. No controller or machine options are duplicated here.";
+longDescription = "Next-NC " + NextNC.version + ". Experimental toolpath-level STEP-NC/AP238 exporter for single-spindle XZ turning. Requires a Next-NC-aware consumer; LinuxCNC cannot load this file directly. No controller or machine options are duplicated here.";
 capabilities = CAPABILITY_TURNING;
 setCodePage("ascii");
 properties = {};
@@ -309,6 +310,84 @@ var nextFeedMode;
 var nextSpindle;
 var nextFailed = false;
 var nextOperationLabel = "";
+var nextRecentEvents = [];
+var nextEventCount = 0;
+var nextStartedUTC = "";
+var nextSectionDiagnostics = [];
+
+// Use the engine log: direct file access is restricted by Fusion's security
+// level, and no callback can run when the engine rejects the global script.
+function nextRead(read) {
+  try { var value = read(); return value === undefined ? "unavailable" : value; }
+  catch (e) { return "unavailable: " + String(e.message || e); }
+}
+function nextLog(message) {
+  // Logging must never replace the original error or change export acceptance.
+  try { log(message); } catch (e) { /* The engine still receives error(). */ }
+}
+function nextContext() {
+  return {
+    schema: "next-nc/diagnostic/1", release: NextNC.version, profile: NextNC.profile,
+    configurationVersion: version, minimumRevision: minimumRevision, certificationLevel: certificationLevel,
+    engine: nextRead(function () { return getVersion(); }),
+    securityLevel: nextRead(function () { return getSecurityLevel(); }),
+    configurationPath: nextRead(function () { return getConfigurationPath(); }),
+    outputPath: nextRead(function () { return getOutputPath(); }),
+    program: nextRead(function () { return programName; }), units: unit === MM ? "mm" : "inch",
+    startedUTC: nextStartedUTC, sectionCount: nextRead(function () { return getNumberOfSections(); })
+  };
+}
+function nextSnapshot(section, index, issues) {
+  return nextRead(function () {
+    var t = section.getTool(), comp = nextCompensation(section);
+    return {label: nextLabel(section, index), section: index + 1, type: section.getType(),
+      tool: t.number, toolOffset: t.compensationOffset, workOffset: section.workOffset,
+      compensation: comp || "metadata missing; runtime guard active", feedMode: section.feedMode,
+      spindleMode: t.getSpindleMode(), surfaceSpeed: t.surfaceSpeed, maximumRPM: t.maximumSpindleSpeed,
+      clockwise: t.clockwise, coolant: t.coolant,
+      workPlane: {forward: nextPoint(section.workPlane.forward), right: nextPoint(section.workPlane.right)},
+      issues: issues};
+  });
+}
+function nextFail(e) {
+  if (nextFailed) { error("Next-NC: export has already failed; see the first diagnostic."); return; }
+  nextFailed = true;
+  var message = String(e.message || e);
+  try {
+    var report = nextContext();
+    report.status = "failed";
+    report.failedUTC = new Date().toISOString();
+    report.error = message;
+    report.callback = nextRecentEvents.length ? nextRecentEvents[nextRecentEvents.length - 1].callback : "unknown";
+    report.operation = nextOperationLabel || "No active operation (see section diagnostics)";
+    report.record = nextRead(function () { return getCurrentRecordId(); });
+    report.ncLocation = nextRead(function () { return getCurrentNCLocation(); });
+    report.spindle = nextSpindle;
+    report.feedMode = nextFeedMode;
+    report.stack = e.stack || "not supplied by engine";
+    report.callbackCount = nextEventCount;
+    report.recentEvents = nextRecentEvents;
+    report.sections = nextSectionDiagnostics;
+    report.sectionSnapshotLimit = 200;
+    report.outputStatus = "FAILED. Do not use the output; serialization/output may be incomplete.";
+    nextLog("NEXTNC DIAGNOSTIC BEGIN\n" + JSON.stringify(report, null, 2) + "\nNEXTNC DIAGNOSTIC END");
+  } catch (reportError) {
+    nextLog("Next-NC diagnostic assembly failed: " + String(reportError.message || reportError) + "; original error: " + message);
+  }
+  error(message + "\n\nNext-NC " + NextNC.version + ": see the detailed report in Fusion's full post log. " +
+    "With the Windows collector installed, reports are archived at %LOCALAPPDATA%\\Fusion360Next-NC\\diagnostics\\latest-error.txt.");
+}
+function nextCallback(name, callback) {
+  return function () {
+    if (nextFailed) { error("Next-NC: export has already failed; see the first diagnostic."); return; }
+    ++nextEventCount;
+    nextRecentEvents.push({callback: name, arguments: Array.prototype.slice.call(arguments),
+      record: nextRead(function () { return getCurrentRecordId(); })});
+    if (nextRecentEvents.length > 12) { nextRecentEvents.shift(); }
+    try { return callback.apply(this, arguments); }
+    catch (e) { if (nextFailed) { throw e; } nextFail(e); }
+  };
+}
 
 function nextDiagnosticText(value) { return String(value).replace(/[\x00-\x1f\x7f]/g, " ").replace(/"/g, "'"); }
 function nextLabel(section, index) {
@@ -370,6 +449,7 @@ function nextPrecheck() {
   if (!count) { throw new Error("Next-NC precheck: no machining sections selected. Select a turning operation and post again."); }
   for (var i = 0; i < count; ++i) {
     var section = getSection(i), issues = nextSectionIssues(section);
+    if (nextSectionDiagnostics.length < 200) { nextSectionDiagnostics.push(nextSnapshot(section, i, issues)); }
     if (issues.length) {
       ++affected;
       problems.push(nextLabel(section, i) + ":\n  - " + issues.join("\n  - "));
@@ -383,11 +463,10 @@ function nextPrecheck() {
 
 function nextGuard(fn) {
   if (nextFailed) { error("Next-NC: export has already failed."); return; }
-  try { return fn(); } catch (e) { nextFailed = true; error(String(e.message || e)); }
+  try { return fn(); } catch (e) { if (nextFailed) { throw e; } nextFail(e); }
 }
 function nextReject(message) {
-  nextFailed = true;
-  error("Next-NC: " + (nextOperationLabel ? nextOperationLabel + ": " : "") + message);
+  nextFail(new Error("Next-NC: " + (nextOperationLabel ? nextOperationLabel + ": " : "") + message));
 }
 function nextPoint(p) { return [p.x, p.y, p.z]; }
 function nextFeed(value) { return {value: value, mode: nextFeedMode}; }
@@ -406,6 +485,8 @@ function nextCoolant(mode) {
 function nextNeedSection() { if (!nextSection) { throw new Error("Next-NC: event outside a machining section"); } }
 function onOpen() {
   nextGuard(function () {
+    nextStartedUTC = new Date().toISOString();
+    nextLog("NEXTNC START " + JSON.stringify(nextContext()));
     nextPrecheck();
     nextProgram = new NextNC.Program({name: programName || "Fusion turning", units: unit === MM ? "mm" : "inch"});
   });
@@ -481,5 +562,35 @@ function onClose() {
     // Nothing is emitted before the entire program has been accepted.
     var output = nextProgram.toSTEP().split("\n");
     for (var i = 0; i < output.length - 1; ++i) { writeln(output[i]); }
+    nextLog("NEXTNC OUTPUT WRITTEN " + JSON.stringify({release: NextNC.version, callbacks: nextEventCount,
+      sections: getNumberOfSections(), lines: output.length - 1}));
   });
 }
+
+// Explicit entry-point wrapping also catches failures outside nextGuard.
+onOpen = nextCallback("onOpen", onOpen);
+onSection = nextCallback("onSection", onSection);
+onRapid = nextCallback("onRapid", onRapid);
+onLinear = nextCallback("onLinear", onLinear);
+onCircular = nextCallback("onCircular", onCircular);
+onDwell = nextCallback("onDwell", onDwell);
+onFeedMode = nextCallback("onFeedMode", onFeedMode);
+onSpindleSpeed = nextCallback("onSpindleSpeed", onSpindleSpeed);
+onRadiusCompensation = nextCallback("onRadiusCompensation", onRadiusCompensation);
+onToolCompensation = nextCallback("onToolCompensation", onToolCompensation);
+onCycle = nextCallback("onCycle", onCycle);
+onCyclePoint = nextCallback("onCyclePoint", onCyclePoint);
+onCyclePath = nextCallback("onCyclePath", onCyclePath);
+onLinear5D = nextCallback("onLinear5D", onLinear5D);
+onRapid5D = nextCallback("onRapid5D", onRapid5D);
+onPassThrough = nextCallback("onPassThrough", onPassThrough);
+onManualNC = nextCallback("onManualNC", onManualNC);
+onOrientateSpindle = nextCallback("onOrientateSpindle", onOrientateSpindle);
+onMachineCommand = nextCallback("onMachineCommand", onMachineCommand);
+onSectionSpecialCycle = nextCallback("onSectionSpecialCycle", onSectionSpecialCycle);
+onSpecialCycle = nextCallback("onSpecialCycle", onSpecialCycle);
+onPower = nextCallback("onPower", onPower);
+onLiveAlignment = nextCallback("onLiveAlignment", onLiveAlignment);
+onCommand = nextCallback("onCommand", onCommand);
+onSectionEnd = nextCallback("onSectionEnd", onSectionEnd);
+onClose = nextCallback("onClose", onClose);

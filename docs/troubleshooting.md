@@ -1,5 +1,61 @@
 # Posting diagnostics
 
+## Engine compatibility error in 0.1.1
+
+`Post configuration is not compatible with this version of the post processor engine` can occur before any callback, including `onOpen`, runs. Version 0.1.1 accidentally set Autodesk's reserved `version` global to the project release (`0.1.1`). Version 0.1.2 restores **`version = "1.0"`**; the project release remains separately available as `NextNC.version`. Autodesk [documents this field as the configuration version](https://cam.autodesk.com/posts/reference/classPostProcessor.html), not the release number.
+
+This regression was reproduced with Autodesk engine 5.413.5 and Autodesk's facing sample: the incorrect field fails during global initialization, and the corrected field allows the sample to post successfully. Import **0.1.2 or later** into the Fusion Post Library and select that copy. Check **Configuration path** in the log to identify the exact file Fusion used. Updating a downloaded copy does not update a previously imported cloud copy. No Fusion compensation or LinuxCNC settings need changing to fix this compatibility error.
+
+Interrogating a CPS with `--interrogate` does **not** exercise this compatibility gate. The project now includes an actual native-posting regression test as well as a configuration-version unit check.
+
+## Automatic Windows log archive
+
+The stable location is:
+
+```text
+%LOCALAPPDATA%\Fusion360Next-NC\diagnostics\
+    latest-error.txt       Most recent failed run, with explanation and full log
+    latest-error.json      Same report as structured data
+    latest.txt/json        Most recent run, including successful runs
+    collector-status.json Last scan time, process ID and collection problems
+    <UTC timestamp>-<hash>\
+        engine.log        Original bytes from Fusion's post log
+        report.txt        Readable diagnosis and full log
+        report.json       Version/path/checksum evidence and callback report
+```
+
+Download and extract `diagnostics-windows.zip` from the release. In PowerShell, run from the extracted folder:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install-diagnostics.ps1
+```
+
+This copies the two scripts to `%LOCALAPPDATA%\Fusion360Next-NC`, starts a hidden current-user collector, and creates **Fusion360Next-NC Diagnostics** in the user's Startup folder. It needs neither Node.js nor administrator rights. It scans `%LOCALAPPDATA%\Temp\Fusion360CAM` every three seconds for dedicated Next-NC engine logs. It preserves existing and future logs, including initialization failures, and retries locked files. A stable log without a terminal result is archived after ten seconds as **incomplete** and collected again if it changes. Later successes do not erase `latest-error`. Timestamp/hash folders retain the history; there is no automatic deletion.
+
+The CPS writes its details through Autodesk's `log()` API. It does not lower Fusion's security level or launch a helper process. The separate collector is necessary because an incompatible or syntactically invalid CPS cannot execute its own diagnostic callbacks. If the collector is stopped, details remain in Fusion's temporary engine log until Fusion/Windows removes it; there is no promise of recovery after that removal. Check `collector-status.json` for a recent `checkedUTC` and an empty `problems` list. Logs larger than 8 MiB are left in place and reported there.
+
+For a one-time collection when the watcher is stopped:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\collect-diagnostics.ps1
+```
+
+To stop collection and remove its sign-in shortcut, while retaining the reports:
+
+```powershell
+& "$env:LOCALAPPDATA\Fusion360Next-NC\install-diagnostics.ps1" -Uninstall
+```
+
+This is a Windows/Fusion log collector; it does not connect to LinuxCNC. It makes no network requests and does not gather Fusion application logs, account tokens, CAD files or complete toolpaths. Reports do contain local paths, operation names and up to 12 recent callback arguments (including coordinates); review them before publishing. The configuration file hash is observed at collection time and can differ from the file used at posting time. Autodesk's opaque log checksum is retained separately, not equated with the SHA-256 file hash.
+
+## Detailed callback reports
+
+From 0.1.2, the first callback failure writes a `NEXTNC DIAGNOSTIC` block to the full engine log. It includes the exact error, UTC timestamps, release/profile/configuration versions, engine version, security API result, source/output paths, units, section count, active operation, failing callback, record/NC location, stack when available, active spindle/feed state and the last 12 events. The first 200 section snapshots include tool and work offsets, compensation metadata, feed/spindle/coolant settings, work-plane vectors and all issues found for that section. All selected sections are still checked, and all precheck failures appear in the error text, even beyond the snapshot limit.
+
+The first error is preserved if later callbacks fail. A diagnostic API/logging failure cannot turn a rejected program into a successful export or replace its original error. Successful runs record start metadata and an output-written marker; the final engine result determines the collector's success status. Engine initialization failures have engine-level evidence only: missing callback details are expected and are not fabricated.
+
+## Section precheck
+
 Starting in 0.1.1, Next-NC checks all selected machining sections in `onOpen`, before motion callbacks or STEP output. Errors are grouped by operation, section number and tool. Fix the listed operations together, regenerate their toolpaths, then post again.
 
 ## Controller-side compensation

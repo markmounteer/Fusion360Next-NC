@@ -1,6 +1,7 @@
 "use strict";
 // Independent, deliberately limited Part 21 reader used by tests, not an interpreter.
 function parse(text) {
+  text = text.replace(/\r\n/g, "\n"); // Native Windows post engine uses CRLF.
   const start = text.indexOf("\nDATA;\n");
   if (start < 0 || !text.endsWith("ENDSEC;\nEND-ISO-10303-21;\n")) throw new Error("Incomplete Part 21 document");
   const data = text.slice(start + 7, text.lastIndexOf("ENDSEC;"));

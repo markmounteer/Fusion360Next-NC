@@ -37,7 +37,9 @@ The post buffers the program until it is accepted, so memory use grows with tool
 
 ## Precheck and diagnostics
 
-Version **0.1.1** checks every selected section before processing motion. It lists affected operation names, section numbers and tools together, with instructions to correct unsupported compensation, cycles, work planes, section types, feed modes, spindle settings and coolant. No extra post options are needed.
+Version **0.1.2** fixes the 0.1.1 engine compatibility regression and adds detailed failure reports. The precheck checks every selected section before processing motion. It lists affected operation names, section numbers and tools together, with instructions to correct unsupported compensation, cycles, work planes, section types, feed modes, spindle settings and coolant. No extra post options are needed.
+
+On Windows, install the local diagnostic collector from the release's `diagnostics-windows.zip` (or run `scripts/install-diagnostics.ps1`). It saves reports automatically to **`%LOCALAPPDATA%\Fusion360Next-NC\diagnostics\latest-error.txt`**, including engine startup errors that happen before the post can run. Reports include the original engine log, version/path/checksum evidence, an explanation, and available operation/tool/callback details. Collection is local only and starts at sign-in. See [installation, report contents and removal](docs/troubleshooting.md#automatic-windows-log-archive).
 
 For example, **In control**, **Wear** or **Inverse wear** compensation produces a diagnostic directing you to **Edit operation → Passes → Compensation Type → In computer**, then regenerate and repost. The post does not change the Fusion job or remove compensation automatically.
 
@@ -79,7 +81,7 @@ The [synthetic example](examples/turning.stpnc), [format contract](docs/format.m
 
 Edit `src/next-nc.js` and `src/fusion-adapter.js`, then run `npm run build`. Commit the generated `posts/next-nc.cps` too. CI checks that the source and post match, runs tests on Node 20/22/24, and checks the reproducible example.
 
-To exercise the writer in Autodesk's installed JavaScript runtime, set `AUTODESK_POST` to your `post.exe` and run `npm run test:autodesk`. This uses CPS interrogation and a synthetic metadata harness; it does not claim to test Fusion's CAM exporter or any machine.
+To exercise the writer in Autodesk's installed JavaScript runtime, set `AUTODESK_POST` to your `post.exe` and run `npm run test:autodesk`. Run `npm run test:posting` for actual engine posting against checksum-pinned Autodesk sample turning inputs (downloaded to `.cache`, not redistributed). This verifies the compatibility gate, successful facing output, and precheck/runtime rejection. `npm run test:collector` checks the Windows log collector. These do not test the Fusion GUI or a machine.
 
 ## License and provenance
 

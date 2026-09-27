@@ -6,7 +6,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const {parse} = require("./support/part21");
 function engine(overrides = {}) {
-  const output = [];
+  const output = [], logs = [];
   const constants = ["MM", "IN", "CAPABILITY_TURNING", "PLANE_ZX", "PLANE_XY", "TYPE_TURNING", "SPINDLE_PRIMARY",
     "SPINDLE_CONSTANT_SURFACE_SPEED", "SPINDLE_CONSTANT_SPINDLE_SPEED", "FEED_PER_MINUTE", "FEED_PER_REVOLUTION", "COOLANT_OFF", "COOLANT_FLOOD", "COOLANT_MIST", "COOLANT_THROUGH_TOOL",
     "RADIUS_COMPENSATION_OFF", "RADIUS_COMPENSATION_LEFT", "RADIUS_COMPENSATION_RIGHT", "COMMAND_START_SPINDLE", "COMMAND_COOLANT_ON", "COMMAND_COOLANT_OFF", "COMMAND_STOP_SPINDLE",
@@ -21,6 +21,9 @@ function engine(overrides = {}) {
     hasParameter: name => c.currentSection.hasParameter(name), getParameter: name => c.currentSection.getParameter(name),
     getCurrentSectionId: () => 0, getNumberOfSections: () => c.sections.length, getSection: i => c.sections[i],
     getCommandStringId: n => String(n), error: message => { throw new Error(message); },
+    log: message => logs.push(message), getVersion: () => "5.413.5", getSecurityLevel: () => 1000,
+    getConfigurationPath: () => "synthetic/next-nc.cps", getOutputPath: () => "synthetic/1001.stpnc",
+    getCurrentRecordId: () => 542, getCurrentNCLocation: () => "Synthetic record 542",
     writeln: line => output.push(line), programName: "Synthetic callback test", spindleSpeed: 1200
   });
   c.unit = c.MM; c.radiusCompensation = c.RADIUS_COMPENSATION_OFF;
@@ -35,8 +38,49 @@ function engine(overrides = {}) {
   c.sections = [c.currentSection];
   Object.assign(c, overrides); vm.createContext(c);
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../posts/next-nc.cps"), "utf8"), c);
-  return {c, output};
+  return {c, output, logs};
 }
+function failureReport(logs) {
+  const report = logs.find(line => line.startsWith("NEXTNC DIAGNOSTIC BEGIN\n"));
+  assert.ok(report, "Failure must include the detailed report");
+  return JSON.parse(report.split("NEXTNC DIAGNOSTIC BEGIN\n")[1].split("\nNEXTNC DIAGNOSTIC END")[0]);
+}
+test("Autodesk configuration version is independent of the release", () => {
+  const {c} = engine(); assert.equal(c.version, "1.0"); assert.equal(c.NextNC.version, require("../package.json").version);
+});
+test("precheck diagnostic contains all affected operations and engine context", () => {
+  const {c, logs, output} = engine(); addSection(c, "Failing face", "control", 7);
+  assert.throws(() => c.onOpen(), /precheck failed/);
+  const report = failureReport(logs);
+  assert.equal(report.engine, "5.413.5"); assert.equal(report.securityLevel, 1000);
+  assert.equal(report.callback, "onOpen"); assert.equal(report.record, 542);
+  assert.equal(report.sections.length, 2); assert.equal(report.sections[1].tool, 7);
+  assert.match(report.sections[1].issues[0], /COMPENSATION/);
+  assert.equal(report.configurationVersion, "1.0"); assert.ok(report.stack);
+  assert.equal(output.length, 0);
+});
+test("runtime report preserves first error and a bounded recent callback trace", () => {
+  const {c, logs} = engine(); c.onOpen(); c.onSection();
+  for (let i = 0; i < 30; ++i) c.onLinear(12, 0, -i, 0.1);
+  assert.throws(() => c.onLinear(12, 5, -31, 0.1));
+  const report = failureReport(logs);
+  assert.equal(report.callback, "onLinear"); assert.equal(report.recentEvents.length, 12);
+  assert.deepEqual(report.recentEvents.at(-1).arguments, [12, 5, -31, 0.1]);
+  assert.match(report.operation, /Synthetic Fusion operation/); assert.equal(report.spindle.speed, 1200);
+  assert.throws(() => c.onClose(), /already failed/);
+  assert.equal(logs.filter(s => s.startsWith("NEXTNC DIAGNOSTIC BEGIN")).length, 1);
+});
+test("diagnostic failures do not replace a machining error or allow output", () => {
+  const {c, output} = engine({log() { throw Error("Log unavailable"); }, getCurrentRecordId() { throw Error("No record"); }});
+  c.onOpen(); c.onSection(); assert.throws(() => c.onCycle(), /Canned cycles/);
+  assert.throws(() => c.onClose(), /already failed/); assert.equal(output.length, 0);
+});
+test("successful export logs its identity without a failure report", () => {
+  const {c, logs} = engine(); c.onOpen(); c.onSection(); c.onLinear(12, 0, 0, 0.1); c.onClose();
+  assert.ok(logs.some(s => s.startsWith("NEXTNC START ")));
+  assert.ok(logs.some(s => s.startsWith("NEXTNC OUTPUT WRITTEN ")));
+  assert.equal(logs.filter(s => s.startsWith("NEXTNC DIAGNOSTIC BEGIN")).length, 0);
+});
 function addSection(c, name, compensation, toolNumber) {
   const section = {...c.currentSection, parameters: {"operation-comment": name}};
   if (compensation !== undefined) section.parameters["operation:compensationType"] = compensation;
