@@ -1,0 +1,17 @@
+{
+  "name": "fusion360next-nc",
+  "version": "0.1.0",
+  "description": "Experimental Fusion turning post and AP238 toolpath writer",
+  "license": "MIT",
+  "main": "src/next-nc.js",
+  "files": ["src/next-nc.js", "posts/next-nc.cps", "docs", "examples"],
+  "repository": {"type": "git", "url": "https://github.com/markmounteer/Fusion360Next-NC.git"},
+  "engines": {"node": ">=20"},
+  "scripts": {
+    "build": "node scripts/build.js",
+    "check:build": "node scripts/build.js --check",
+    "test": "node --test test/writer.test.js test/fusion.test.js",
+    "example": "node examples/turning.js",
+    "test:autodesk": "node scripts/test-autodesk.js"
+  }
+}

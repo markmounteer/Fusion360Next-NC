@@ -1,0 +1,78 @@
+# Fusion360Next-NC
+
+[![Tests](https://github.com/markmounteer/Fusion360Next-NC/actions/workflows/ci.yml/badge.svg)](https://github.com/markmounteer/Fusion360Next-NC/actions/workflows/ci.yml)
+
+An experimental Autodesk Fusion post processor and JavaScript library for **toolpath-level STEP-NC/AP238**, initially for a single-spindle XZ lathe.
+
+**Next-NC is the project name.** The output is an ISO 10303-21 text file using the AP238 `INTEGRATED_CNC_SCHEMA`, with a small, documented Next-NC execution profile. It is not G-code, and stock LinuxCNC cannot execute it. A LinuxCNC consumer/interpreter is a separate, unimplemented component. AP238 conformance and third-party interoperability have not been certified or independently validated.
+
+## Get the post
+
+Download [posts/next-nc.cps](posts/next-nc.cps). It is a standalone file; Node.js is not needed to use it in Fusion.
+
+1. Open Fusion's **Post Library** and select **My Posts → Local**.
+2. Import `next-nc.cps` and select **Next-NC - experimental AP238 XZ turning** when posting.
+3. Use fixed XZ turning operations, the primary spindle, an unrotated work plane, and compensation **In computer**.
+4. Post to a new `.stpnc` file for inspection and development. Do not send it to a machine expecting G-code.
+
+See Autodesk's [Post Library instructions](https://help.autodesk.com/cloudhelp/ENU/Fusion-CAM/files/MFG-ADD-POST-PROCESSOR-TO-LIBRARY.htm).
+
+## What it exports
+
+| Supported | Details |
+| --- | --- |
+| Ordered turning sections | Logical tools, Fusion work-offset numbers, tool-offset numbers, section entry points |
+| Rapid and cutting lines | All vertices preserved; adjacent moves with identical process state share a polyline |
+| XZ circular arcs | Analytic circles and bounded trims, both directions, full circles |
+| Units | Millimetres or inches, explicit STEP units |
+| Feed | Length/minute or length/revolution |
+| Spindle | Constant RPM; CSS with Fusion's maximum RPM |
+| Coolant and dwell | Off, flood, mist, through tool; dwell in seconds |
+
+There are **zero user-defined post properties**. Fusion supplies machining decisions. A future controller consumer must own machine limits, tool changes, offset application, entry/retract policy, parking, overrides and motion planning.
+
+The initial post rejects canned cycles, threading/tapping, controller cutter compensation, dual tool compensation, optional sections, secondary spindles, rotated setups, multi-axis motion, Manual NC, pass-through commands and explicit machine commands. An error prevents the writer from emitting a complete program. Unsupported cycles are not silently converted to ordinary feed moves.
+
+The post buffers the program until it is accepted, so memory use grows with toolpath size. Geometry is a toolpath, not a reconstruction of Fusion's design, stock, fixtures or feature-based machining intent.
+
+## Library
+
+Requires Node.js 20 or later for development, with no npm dependencies.
+
+```sh
+git clone https://github.com/markmounteer/Fusion360Next-NC.git
+cd Fusion360Next-NC
+npm test
+npm run check:build
+npm run example
+```
+
+```js
+const {Program} = require('./src/next-nc');
+const program = new Program({name: 'Example', units: 'mm'});
+const section = program.addSection({
+  name: 'Outside turning',
+  tool: {number: 1, offset: 1, description: 'OD tool'},
+  workOffset: 1,
+  start: [12, 0, 2],
+  spindle: {mode: 'css', speed: 80000, maximumRPM: 1800, clockwise: true},
+  coolant: 'off'
+});
+section.rapid([10, 0, 2]);
+section.linear([10, 0, -10], {value: 0.1, mode: 'perRevolution'});
+const stepText = program.toSTEP();
+```
+
+`speed` in CSS mode uses **program length units per minute**: `80000` mm/min means 80 m/min; `1200` inch/min means 100 ft/min. Positions use physical **X radius**, not diameter. The explicit `start` is an entry target; the exporter does not know the machine's current position or invent a safe path to that target.
+
+The [synthetic example](examples/turning.stpnc), [format contract](docs/format.md), [LinuxCNC integration plan](docs/linuxcnc.md), and [validation record](docs/validation.md) explain the current boundary.
+
+## Development
+
+Edit `src/next-nc.js` and `src/fusion-adapter.js`, then run `npm run build`. Commit the generated `posts/next-nc.cps` too. CI checks that the source and post match, runs tests on Node 20/22/24, and checks the reproducible example.
+
+To exercise the writer in Autodesk's installed JavaScript runtime, set `AUTODESK_POST` to your `post.exe` and run `npm run test:autodesk`. This uses CPS interrogation and a synthetic metadata harness; it does not claim to test Fusion's CAM exporter or any machine.
+
+## License and provenance
+
+MIT, for this repository's original code. Autodesk Fusion and its post engine are separate products and are not distributed here. No Autodesk post source, proprietary STEP SDK, machine configuration, private job or customer CAD is included. The standards/API references are recorded in [docs/references.md](docs/references.md).
