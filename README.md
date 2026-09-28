@@ -4,7 +4,7 @@
 
 An experimental Autodesk Fusion post processor and JavaScript library for **toolpath-level STEP-NC/AP238**, initially for a single-spindle XZ lathe.
 
-**Next-NC is the project name.** The output is an ISO 10303-21 text file using the AP238 `INTEGRATED_CNC_SCHEMA`, with a small, documented Next-NC execution profile. It is not G-code, and stock LinuxCNC cannot execute it. A LinuxCNC consumer/interpreter is a separate, unimplemented component. AP238 conformance and third-party interoperability have not been certified or independently validated.
+**Next-NC is the project name.** The output is an ISO 10303-21 text file using the AP238 `INTEGRATED_CNC_SCHEMA`, with a small, documented Next-NC execution profile. It is not G-code, and stock LinuxCNC cannot execute it directly. The separate [LinuxCNCNext-NC translator](https://github.com/markmounteer/LinuxCNCNext-NC) provides an experimental G-code input-filter bridge with explicit machine/setup plans. A native STEP-NC interpreter remains unimplemented. AP238 conformance and third-party interoperability have not been certified or independently validated.
 
 ## Get the post
 

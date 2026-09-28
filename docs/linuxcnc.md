@@ -2,7 +2,9 @@
 
 This repository produces files. It does not install a LinuxCNC interpreter, change a machine configuration, or implement motion control.
 
-LinuxCNC normally executes RS274 G-code. It documents an optional `[TASK] INTERPRETER` shared-library setting and input filters. A filter that translates AP238 to G-code could provide an initial simulation bridge, but execution would still use the G-code interpreter. A native Next-NC interpreter would instead map the accepted AP238/profile content into LinuxCNC's canonical machining interface and retain LinuxCNC's trajectory planner, motion subsystem and HAL. See the [INI configuration reference](https://linuxcnc.org/docs/stable/html/config/ini-config.html) and [filter documentation](https://linuxcnc.org/docs/stable/html/gui/filter-programs.html).
+The separate public [LinuxCNCNext-NC](https://github.com/markmounteer/LinuxCNCNext-NC) repository now implements a bounded Next-NC-to-LinuxCNC G-code translator and file filter. It preserves the exported paths/process states, requires explicit tool/WCS mappings and reviewed entry/retract plans, and includes synthetic offline `rs274` interpreter tests. See that repository's validation record and setup guide. It does not install itself on a physical machine or establish machine readiness.
+
+LinuxCNC normally executes RS274 G-code. It documents an optional `[TASK] INTERPRETER` shared-library setting and input filters. The translator takes the filter approach, so execution still uses the G-code interpreter. A native Next-NC interpreter would instead map the accepted AP238/profile content into LinuxCNC's canonical machining interface and retain LinuxCNC's trajectory planner, motion subsystem and HAL. See the [INI configuration reference](https://linuxcnc.org/docs/stable/html/config/ini-config.html) and [filter documentation](https://linuxcnc.org/docs/stable/html/gui/filter-programs.html).
 
 ## Required consumer work
 
