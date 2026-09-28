@@ -1,6 +1,6 @@
 {
   "name": "fusion360next-nc",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Experimental Fusion turning post and AP238 toolpath writer",
   "license": "MIT",
   "main": "src/next-nc.js",

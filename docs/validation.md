@@ -1,10 +1,11 @@
 # Validation record
 
-Version 0.1.5, 2026-09-28 UTC.
+Version 0.1.6, 2026-09-28 UTC.
 
 ## Verified locally
 
-- Node.js 24.13.1: 56 writer, synthetic Fusion callback and independent-inspector tests, including both numeric/Boolean arc directions, full-circle flags, rejection of ambiguous flags, strict independent-writer validation, mm/inch tolerance-bounded native linearization delegation, excessive mismatch and incomplete-linearization rejection, configuration-version separation, structured failure context, bounded event history, first-error preservation and logging failure isolation.
+- Node.js 24.13.1: 59 writer, synthetic Fusion callback and independent-inspector tests, including both numeric/Boolean arc directions, full-circle flags, rejection of ambiguous flags, strict independent-writer validation, mm/inch tolerance-bounded native linearization delegation, excessive mismatch and incomplete-linearization rejection, configuration-version separation, structured failure context, bounded event history, first-error preservation and logging failure isolation.
+- Added source prechecks aggregate invalid tool/offset/WCS identities, entry coordinates, RPM, direction and supplied tolerance. Metadata-read failures retain later-section diagnostics. Successful prechecks log source facts, accept native numeric direction flags and keep zero post properties. Native Autodesk interrogation and facing/profile posting also pass with these checks.
 - Exact value sharing preserves repeated motion and separate operations with different feed, coolant and work-offset states. Tests retain nearby but unequal points, verify fresh caches per serialization, and reconcile export statistics with decoded output.
 - Shared-curve tests preserve repeated arcs with different cutting states, distinguish opposite senses and full-circle trims, share identical rapid/cutting geometry without merging actions, and retain radii differing by 1e-12. Native sample tests count ordered arc uses independently of shared curve definitions.
 - Comparison tests ignore metadata, renumbered references and duplicate point definitions, but detect exact changes to feed, coordinates, offsets, spindle direction and coolant. Both inputs are validated; CLI tests distinguish matching, differing, invalid and malformed-command outcomes.
@@ -24,7 +25,7 @@ The synthetic callback tests exercise `onOpen`, section metadata, linear/rapid/a
 
 ## Not yet verified
 
-- Reposting the user's actual Fusion job with 0.1.5 through the GUI/CAM exporter. A supplied successful 0.1.4 export has been inspected and reserialized; this does not replace a fresh Fusion repost. Native 0.1.5 posting uses official samples because the user's CAM input is not available for replay.
+- Reposting the user's actual Fusion job with 0.1.6 through the GUI/CAM exporter. Earlier supplied exports have been inspected; this does not replace a fresh Fusion repost. Native 0.1.6 posting uses official samples because the user's CAM input is not available for replay.
 - Full EXPRESS types, inverse constraints, global rules or ISO AP238 conformance. The test reader is a structural subset reader, not an EXPRESS validator.
 - Acceptance by an independent STEP-NC implementation.
 - Geometry comparison against a real Fusion simulation, large-job performance or machine execution.

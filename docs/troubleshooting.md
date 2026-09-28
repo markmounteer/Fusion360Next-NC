@@ -72,6 +72,10 @@ The first error is preserved if later callbacks fail. A diagnostic API/logging f
 
 ## Section precheck
 
+Version 0.1.6 adds early checks for positive integer tool numbers, nonnegative integer compensation/WCS offsets, finite initial coordinates, explicit spindle direction, initial RPM and any supplied operation tolerance. WCS 0 remains unspecified and requires an explicit mapping in the consumer; this post does not guess a LinuxCNC WCS. Numeric native direction flags 0/1 are normalized to Boolean values at the adapter boundary.
+
+An unreadable section produces a `[METADATA]` issue and does not prevent checking subsequent sections. Successful runs log `NEXTNC PRECHECK` with strategy, initial position/RPM, operation tolerance and existing tool/process facts for up to 200 sections, plus the total count checked. These are Fusion source checks only: they do not establish tool-table compatibility or safe machine clearance. The LinuxCNC translator's `preflight --tool-table` reads an existing controller table separately.
+
 Starting in 0.1.1, Next-NC checks all selected machining sections in `onOpen`, before motion callbacks or STEP output. Errors are grouped by operation, section number and tool. Fix the listed operations together, regenerate their toolpaths, then post again.
 
 ## Controller-side compensation

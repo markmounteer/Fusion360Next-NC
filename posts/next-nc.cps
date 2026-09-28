@@ -4,7 +4,7 @@
  */
 var NextNC = (function () {
   "use strict";
-  var VERSION = "0.1.5";
+  var VERSION = "0.1.6";
   var PROFILE = "next-nc/turning-toolpath/0.1";
   function requireValue(ok, message) { if (!ok) { throw new Error("Next-NC: " + message); } }
   function finite(n, label) {
@@ -379,6 +379,10 @@ function nextSnapshot(section, index, issues) {
     return {label: nextLabel(section, index), section: index + 1, type: section.getType(),
       tool: t.number, toolOffset: t.compensationOffset, workOffset: section.workOffset,
       compensation: comp || "metadata missing; runtime guard active", feedMode: section.feedMode,
+      strategy: nextRead(function () { return section.getStrategy(); }),
+      entry: nextRead(function () { return nextPoint(section.getInitialPosition()); }),
+      initialRPM: nextRead(function () { return section.getInitialSpindleSpeed(); }),
+      operationTolerance: nextRead(function () { return section.getParameter("operation:tolerance"); }),
       spindleMode: t.getSpindleMode(), surfaceSpeed: t.surfaceSpeed, maximumRPM: t.maximumSpindleSpeed,
       clockwise: t.clockwise, coolant: t.coolant,
       workPlane: {forward: nextPoint(section.workPlane.forward), right: nextPoint(section.workPlane.right)},
@@ -427,10 +431,10 @@ function nextCallback(name, callback) {
 
 function nextDiagnosticText(value) { return String(value).replace(/[\x00-\x1f\x7f]/g, " ").replace(/"/g, "'"); }
 function nextLabel(section, index) {
-  var name = section.hasParameter("operation-comment") ? section.getParameter("operation-comment") : "";
-  var sectionTool = section.getTool();
+  var name = nextRead(function () { return section.hasParameter("operation-comment") ? section.getParameter("operation-comment") : ""; });
+  var number = nextRead(function () { return section.getTool().number; });
   return "Operation \"" + nextDiagnosticText(name || "Unnamed operation") + "\" (section " + (index + 1) +
-    ", tool T" + nextDiagnosticText(sectionTool.number) + ")";
+    ", tool T" + nextDiagnosticText(number) + ")";
 }
 function nextCompensation(section) {
   // Missing metadata is not evidence of In computer. Keep the runtime guard active.
@@ -445,6 +449,9 @@ function nextCompensationFix() {
     "Do not select Off just to bypass this check; Off removes compensation.";
 }
 function nextPositive(value) { return typeof value === "number" && isFinite(value) && value > 0 && value < 1e15; }
+function nextInteger(value, minimum) {
+  return typeof value === "number" && isFinite(value) && value >= minimum && value < 1e15 && Math.floor(value) === value;
+}
 function nextSectionIssues(section) {
   var issues = [];
   if (section.getType() !== TYPE_TURNING || section.isMultiAxis()) {
@@ -469,10 +476,24 @@ function nextSectionIssues(section) {
     issues.push("[FEED] Unsupported feed mode. Use feed per minute or feed per revolution.");
   }
   var sectionTool = section.getTool(), mode = sectionTool.getSpindleMode();
+  if (!nextInteger(sectionTool.number, 1)) { issues.push("[TOOL_NUMBER] Set a positive integer tool number in Fusion's tool definition."); }
+  if (!nextInteger(sectionTool.compensationOffset, 0)) { issues.push("[TOOL_OFFSET] Set a nonnegative integer compensation offset in Fusion's tool definition."); }
+  if (!nextInteger(section.workOffset, 0)) { issues.push("[WORK_OFFSET] Set a nonnegative integer WCS offset in the Fusion setup. Offset 0 remains unspecified and needs an explicit consumer mapping."); }
+  if ([true, false, 0, 1].indexOf(sectionTool.clockwise) < 0) { issues.push("[DIRECTION] Fusion did not supply an explicit spindle direction. Review the tool/operation and regenerate it."); }
+  var initial = section.getInitialPosition();
+  if (!initial || [initial.x, initial.y, initial.z].some(function (v) { return typeof v !== "number" || !isFinite(v) || Math.abs(v) >= 1e15; })) {
+    issues.push("[ENTRY] Fusion supplied an invalid initial position. Regenerate this operation's toolpath.");
+  }
+  if (section.hasParameter("operation:tolerance") && !nextPositive(section.getParameter("operation:tolerance"))) {
+    issues.push("[TOLERANCE] Fusion's operation tolerance must be a positive finite value. Review the operation and regenerate its toolpath.");
+  }
   if (mode === SPINDLE_CONSTANT_SURFACE_SPEED) {
     if (!nextPositive(sectionTool.surfaceSpeed)) { issues.push("[CSS_SPEED] Set a positive surface speed in the Fusion operation's Tool tab."); }
     if (!nextPositive(sectionTool.maximumSpindleSpeed)) { issues.push("[CSS_LIMIT] Set a positive maximum spindle speed for CSS in the Fusion operation's Tool tab."); }
-  } else if (mode !== SPINDLE_CONSTANT_SPINDLE_SPEED) {
+  } else if (mode === SPINDLE_CONSTANT_SPINDLE_SPEED) {
+    var initialRPM = section.getInitialSpindleSpeed();
+    if (typeof initialRPM !== "number" || !nextPositive(Math.abs(initialRPM))) { issues.push("[RPM] Set a positive spindle RPM in the Fusion operation's Tool tab and regenerate the toolpath."); }
+  } else {
     issues.push("[SPINDLE_MODE] Only constant RPM or constant surface speed is supported. Review the Fusion operation's spindle settings.");
   }
   if ([COOLANT_OFF, COOLANT_FLOOD, COOLANT_MIST, COOLANT_THROUGH_TOOL].indexOf(sectionTool.coolant) < 0) {
@@ -484,7 +505,9 @@ function nextPrecheck() {
   var problems = [], affected = 0, count = getNumberOfSections();
   if (!count) { throw new Error("Next-NC precheck: no machining sections selected. Select a turning operation and post again."); }
   for (var i = 0; i < count; ++i) {
-    var section = getSection(i), issues = nextSectionIssues(section);
+    var section = undefined, issues;
+    try { section = getSection(i); issues = nextSectionIssues(section); }
+    catch (e) { issues = ["[METADATA] Fusion section metadata could not be read: " + nextDiagnosticText(e.message || e) + ". Regenerate this operation and check the full diagnostic log."]; }
     if (nextSectionDiagnostics.length < 200) { nextSectionDiagnostics.push(nextSnapshot(section, i, issues)); }
     if (issues.length) {
       ++affected;
@@ -495,6 +518,9 @@ function nextPrecheck() {
     throw new Error("Next-NC " + NextNC.version + " precheck failed: " + affected + " of " + count + " section(s) need attention.\n\n" +
       problems.join("\n\n") + "\n\nNo STEP-NC program was written. Correct the listed settings and regenerate the affected toolpaths.");
   }
+  nextLog("NEXTNC PRECHECK " + JSON.stringify({status: "passed", sectionsChecked: count,
+    sections: nextSectionDiagnostics, sectionSnapshotLimit: 200,
+    validation: "Fusion source metadata only; machine/tool-table compatibility and clearance are not checked."}));
 }
 
 function nextGuard(fn) {
@@ -555,7 +581,7 @@ function onSection() {
     var mode = tool.getSpindleMode();
     var css = mode === SPINDLE_CONSTANT_SURFACE_SPEED;
     nextSpindle = {mode: css ? "css" : "rpm", speed: css ? tool.surfaceSpeed : Math.abs(spindleSpeed),
-      clockwise: tool.clockwise, maximumRPM: tool.maximumSpindleSpeed};
+      clockwise: nextBoolean(tool.clockwise, "Fusion spindle direction"), maximumRPM: tool.maximumSpindleSpeed};
     nextSection = nextProgram.addSection({
       name: hasParameter("operation-comment") ? getParameter("operation-comment") : "Turning " + (getCurrentSectionId() + 1),
       tool: {number: tool.number, offset: tool.compensationOffset, description: tool.comment || ""},

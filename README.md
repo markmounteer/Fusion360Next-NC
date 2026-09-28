@@ -17,7 +17,9 @@ Download [posts/next-nc.cps](posts/next-nc.cps). It is a standalone file; Node.j
 
 See Autodesk's [Post Library instructions](https://help.autodesk.com/cloudhelp/ENU/Fusion-CAM/files/MFG-ADD-POST-PROCESSOR-TO-LIBRARY.htm).
 
-**0.1.5 also shares identical curve definitions without removing any moves.** Polylines, arc frames, circles and trims reuse exact geometry; every operation, path, direction and process state remains distinct. Reports distinguish geometry definitions from motion counts, and the independent inspector can compare exports and identify the first program change. Update the imported CPS; the existing Windows diagnostic collector does not need reinstalling. All previous arc and compaction fixes remain included.
+**0.1.6 strengthens prechecking before any toolpath is processed.** It checks logical tool/WCS identifiers, initial coordinates, RPM, direction and supplied tolerance across selected sections, and continues diagnosing later sections if one section's metadata cannot be read. Successful prechecks log source facts as well. There are still zero post properties; the [translator](https://github.com/markmounteer/LinuxCNCNext-NC) owns optional checking against your existing LinuxCNC tool table. See the [research rationale](docs/research-review.md).
+
+Exact geometry sharing and export comparison from 0.1.5 remain included. Every move, feed, process state and operation stays distinct. Update the imported CPS; the existing Windows diagnostic collector does not need reinstalling.
 
 ## What it exports
 

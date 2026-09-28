@@ -53,13 +53,14 @@ longDescription = syntheticOutput();
   const diagnosticDriver = `
 function syntheticDiagnostic() {
   var params = {"operation-comment": "Synthetic face", "operation:compensationType": "control"};
-  var t = {number: 7, getSpindleMode: function () { return SPINDLE_CONSTANT_SURFACE_SPEED; },
+  var t = {number: 7, compensationOffset: 7, clockwise: true, getSpindleMode: function () { return SPINDLE_CONSTANT_SURFACE_SPEED; },
     surfaceSpeed: 80000, maximumSpindleSpeed: 0, coolant: COOLANT_OFF};
   var s = {hasParameter: function (name) { return Object.prototype.hasOwnProperty.call(params, name); },
     getParameter: function (name) { return params[name]; }, getTool: function () { return t; },
     getType: function () { return TYPE_TURNING; }, isMultiAxis: function () { return false; },
     isOptional: function () { return false; }, hasAnyCycle: function () { return false; },
-    spindle: SPINDLE_PRIMARY, feedMode: FEED_PER_REVOLUTION,
+    spindle: SPINDLE_PRIMARY, feedMode: FEED_PER_REVOLUTION, workOffset: 1,
+    getInitialPosition: function () { return new Vector(10, 0, 2); },
     workPlane: {forward: new Vector(0,0,1), right: new Vector(1,0,0)}};
   return nextLabel(s, 1) + ": " + nextSectionIssues(s).join("\\n");
 }

@@ -31,6 +31,7 @@ function engine(overrides = {}) {
     parameters: {"operation-comment": "Synthetic Fusion operation", "operation:compensationType": "computer"},
     hasParameter(name) { return Object.hasOwn(this.parameters, name); }, getParameter(name) { return this.parameters[name]; },
     getTool: () => c.tool, hasAnyCycle: () => false,
+    getInitialSpindleSpeed: () => c.spindleSpeed, getStrategy: () => "turningProfile",
     spindle: c.SPINDLE_PRIMARY, feedMode: c.FEED_PER_REVOLUTION, workOffset: 1,
     workPlane: {forward: {x: 0, y: 0, z: 1}, right: {x: 1, y: 0, z: 0}}, getInitialPosition: () => ({x: 12, y: 0, z: 2})};
   c.tool = {getSpindleMode: () => c.SPINDLE_CONSTANT_SPINDLE_SPEED, number: 1, compensationOffset: 1,
@@ -154,18 +155,57 @@ test("rounding mismatch delegates to Fusion with the tighter remaining tolerance
     c.onClose(); assert.equal(parse(output.join("\n") + "\n").all("CIRCLE").length, 0);
   }
 });
-test("arc fallback rejects excessive mismatch, unavailable linearization, and invalid operation tolerance", () => {
-  for (const scenario of ["large mismatch", "tight operation", "unavailable", "invalid tolerance", "missing endpoint"]) {
+test("arc fallback rejects excessive mismatch, unavailable linearization, and incomplete results", () => {
+  for (const scenario of ["large mismatch", "tight operation", "unavailable", "missing endpoint"]) {
     const {c, output} = engine(); let invoked = false;
     c.canLinearize = () => scenario !== "unavailable";
     c.linearize = () => { invoked = true; };
     if (scenario === "tight operation") c.currentSection.parameters["operation:tolerance"] = 0.0000001;
-    if (scenario === "invalid tolerance") c.currentSection.parameters["operation:tolerance"] = 0;
     c.onOpen(); c.onSection(); c.onRapid(10, 0, 0);
     assert.throws(() => c.onCircular(0, 8, 0, 0, 8, 0, scenario === "large mismatch" ? -3 : -2.00001, 0.1), /linearization|linearize/);
     assert.equal(invoked, scenario === "missing endpoint"); assert.equal(c.nextLinearizedArcs, 0);
     assert.throws(() => c.onClose(), /already failed/); assert.equal(output.length, 0);
   }
+});
+
+test("source precheck aggregates invalid identities, RPM, entry and tolerance before any output", () => {
+  const {c, output, logs} = engine();
+  const bad = addSection(c, "Invalid source data", "computer", 0);
+  const tool = bad.getTool(); tool.compensationOffset = -1; tool.clockwise = "yes";
+  bad.workOffset = 1.5; bad.getInitialSpindleSpeed = () => 0;
+  bad.getInitialPosition = () => ({x: NaN, y: 0, z: 2});
+  bad.parameters["operation:tolerance"] = 0;
+  addSection(c, "Later compensation issue", "control", 4);
+  assert.throws(() => c.onOpen(), error => {
+    for (const code of ["TOOL_NUMBER", "TOOL_OFFSET", "WORK_OFFSET", "DIRECTION", "ENTRY", "RPM", "TOLERANCE", "COMPENSATION"]) {
+      assert.ok(error.message.includes(`[${code}]`), code);
+    }
+    assert.match(error.message, /2 of 3 section/); return true;
+  });
+  assert.equal(output.length, 0); assert.equal(c.nextProgram, undefined);
+  assert.equal(failureReport(logs).sections.length, 3);
+});
+
+test("unreadable section metadata does not hide problems in later sections", () => {
+  const {c, output} = engine();
+  addSection(c, "Broken metadata", "computer", 3).getInitialPosition = () => { throw Error("position unavailable"); };
+  addSection(c, "Later", "control", 4);
+  assert.throws(() => c.onOpen(), error => {
+    assert.match(error.message, /\[METADATA\].*position unavailable/);
+    assert.match(error.message, /\[COMPENSATION\]/); assert.match(error.message, /2 of 3/); return true;
+  });
+  assert.equal(output.length, 0);
+});
+
+test("successful precheck logs source facts and accepts numeric native spindle direction", () => {
+  const {c, logs, output} = engine(); c.tool.clockwise = 1;
+  c.currentSection.parameters["operation:tolerance"] = 0.001;
+  c.onOpen();
+  const report = JSON.parse(logs.find(s => s.startsWith("NEXTNC PRECHECK ")).slice("NEXTNC PRECHECK ".length));
+  assert.equal(report.sectionsChecked, 1); assert.equal(report.sections[0].initialRPM, 1200);
+  assert.equal(report.sections[0].strategy, "turningProfile"); assert.equal(report.sections[0].operationTolerance, 0.001);
+  c.onSection(); c.onLinear(12, 0, 0, 0.1); c.onClose();
+  assert.ok(output.length); assert.equal(Object.keys(c.properties).length, 0);
 });
 test("work offsets and tools survive multiple sections without manufactured connecting moves", () => {
   const {c, output} = engine(); c.onOpen(); c.onSection(); c.onLinear(12, 0, 0, 0.1); c.onSectionEnd();
