@@ -103,3 +103,7 @@ To exercise the writer in Autodesk's installed JavaScript runtime, set `AUTODESK
 ## License and provenance
 
 MIT, for this repository's original code. Autodesk Fusion and its post engine are separate products and are not distributed here. No Autodesk post source, proprietary STEP SDK, machine configuration, private job or customer CAD is included. The standards/API references are recorded in [docs/references.md](docs/references.md).
+
+## Architecture research update
+
+See [the architecture review and resulting improvements](docs/architecture-research.md) for the three-paper review, stronger input checks and indexed interpretation. The format and machining semantics remain unchanged.

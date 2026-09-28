@@ -4,7 +4,7 @@
  */
 var NextNC = (function () {
   "use strict";
-  var VERSION = "0.1.6";
+  var VERSION = "0.1.7";
   var PROFILE = "next-nc/turning-toolpath/0.1";
   function requireValue(ok, message) { if (!ok) { throw new Error("Next-NC: " + message); } }
   function finite(n, label) {
@@ -383,6 +383,11 @@ function nextSnapshot(section, index, issues) {
       entry: nextRead(function () { return nextPoint(section.getInitialPosition()); }),
       initialRPM: nextRead(function () { return section.getInitialSpindleSpeed(); }),
       operationTolerance: nextRead(function () { return section.getParameter("operation:tolerance"); }),
+      axisSubstitution: nextRead(function () { return nextSectionFlag(section, "getAxisSubstitution", "axisSubstitution"); }),
+      dynamicWorkOffsetDefined: nextRead(function () { return nextSectionFlag(section, "hasDynamicWorkOffset"); }),
+      dynamicWorkOffset: nextRead(function () { return section.getDynamicWorkOffset(); }),
+      tailstock: nextRead(function () { return nextSectionFlag(section, "getTailstock", "tailstock"); }),
+      partCatcher: nextRead(function () { return nextSectionFlag(section, "getPartCatcher", "partCatcher"); }),
       spindleMode: t.getSpindleMode(), surfaceSpeed: t.surfaceSpeed, maximumRPM: t.maximumSpindleSpeed,
       clockwise: t.clockwise, coolant: t.coolant,
       workPlane: {forward: nextPoint(section.workPlane.forward), right: nextPoint(section.workPlane.right)},
@@ -452,6 +457,10 @@ function nextPositive(value) { return typeof value === "number" && isFinite(valu
 function nextInteger(value, minimum) {
   return typeof value === "number" && isFinite(value) && value >= minimum && value < 1e15 && Math.floor(value) === value;
 }
+function nextSectionFlag(section, method, property) {
+  var value = typeof section[method] === "function" ? section[method]() : (property ? section[property] : undefined);
+  return value === undefined ? undefined : nextBoolean(value, "Fusion " + method);
+}
 function nextSectionIssues(section) {
   var issues = [];
   if (section.getType() !== TYPE_TURNING || section.isMultiAxis()) {
@@ -459,6 +468,16 @@ function nextSectionIssues(section) {
   }
   if (section.isOptional()) { issues.push("[OPTIONAL] Optional sections are unsupported. Make this operation non-optional or exclude it."); }
   if (section.spindle !== SPINDLE_PRIMARY) { issues.push("[SPINDLE] Secondary-spindle operations are unsupported. Use a primary-spindle setup."); }
+  var unsupported = [["getAxisSubstitution", "axisSubstitution", "AXIS_SUBSTITUTION", "Axis substitution"],
+    ["getTailstock", "tailstock", "TAILSTOCK", "Tailstock control"],
+    ["getPartCatcher", "partCatcher", "PART_CATCHER", "Part-catcher control"]];
+  for (var f = 0; f < unsupported.length; ++f) {
+    var flag = unsupported[f];
+    if (nextSectionFlag(section, flag[0], flag[1])) {
+      issues.push("[" + flag[2] + "] " + flag[3] + " is requested but cannot be represented by this Next-NC profile. " +
+        "Use a post and consumer that support the required process; do not disable required equipment or coordinate transforms to bypass this check.");
+    }
+  }
   var wp = section.workPlane;
   if (!isSameDirection(wp.forward, new Vector(0, 0, 1)) || !isSameDirection(wp.right, new Vector(1, 0, 0))) {
     issues.push("[WORKPLANE] Rotated/mirrored work planes are unsupported. Use an unrotated turning work plane (+X right, +Z forward).");
@@ -483,6 +502,8 @@ function nextSectionIssues(section) {
   var initial = section.getInitialPosition();
   if (!initial || [initial.x, initial.y, initial.z].some(function (v) { return typeof v !== "number" || !isFinite(v) || Math.abs(v) >= 1e15; })) {
     issues.push("[ENTRY] Fusion supplied an invalid initial position. Regenerate this operation's toolpath.");
+  } else if (Math.abs(initial.y) > 1e-9) {
+    issues.push("[ENTRY_Y] Initial Y is outside the supported zero-Y XZ plane. Review the setup/work plane and regenerate this operation.");
   }
   if (section.hasParameter("operation:tolerance") && !nextPositive(section.getParameter("operation:tolerance"))) {
     issues.push("[TOLERANCE] Fusion's operation tolerance must be a positive finite value. Review the operation and regenerate its toolpath.");

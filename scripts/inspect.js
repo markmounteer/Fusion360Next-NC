@@ -19,5 +19,9 @@ if (!input || files.length > 2 || invalid) {
     if (output) fs.writeFileSync(output, report, {flag: "wx"});
     process.stdout.write(report);
     if (result.report.comparison && !result.report.comparison.sameProgram) process.exitCode = 3;
-  } catch (error) { console.error(error.message); process.exitCode = 1; }
+  } catch (error) {
+    console.error(error.message);
+    if (error.context) console.error(JSON.stringify(error.context));
+    process.exitCode = 1;
+  }
 }

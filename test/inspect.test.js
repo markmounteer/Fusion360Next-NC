@@ -173,6 +173,45 @@ test("CLI writes a new local report, rejects invalid data and never overwrites a
     result = spawnSync(process.execPath, [cli, input, input], {encoding: "utf8"});
     assert.equal(result.status, 1); assert.equal(fs.readFileSync(input, "utf8"), text);
     fs.writeFileSync(input, "incomplete"); result = spawnSync(process.execPath, [cli, input], {encoding: "utf8"});
-    assert.equal(result.status, 1); assert.match(result.stderr, /unsupported schema/);
+    assert.equal(result.status, 1); assert.match(result.stderr, /Incomplete Part 21/);
   } finally { fs.rmSync(directory, {recursive: true, force: true}); }
+});
+
+test("parsed headers reject schema text spoofing, duplicates and wrong attribute types", () => {
+  const {p, s} = sample(); s.linear([3, 0, 0], feed); const text = p.toSTEP();
+  assert.equal(parse(text.replace(/\n/g, "\r\n")).schema, "INTEGRATED_CNC_SCHEMA");
+  for (const bad of [
+    text.replace("FILE_SCHEMA(('INTEGRATED_CNC_SCHEMA'));", "FILE_SCHEMA(('OTHER'));\nFILE_SCHEMA(('INTEGRATED_CNC_SCHEMA'));"),
+    text.replace("FILE_SCHEMA(('INTEGRATED_CNC_SCHEMA'));", "FILE_SCHEMA(('OTHER'), 'FILE_SCHEMA((''INTEGRATED_CNC_SCHEMA''))');"),
+    text.replace("FILE_SCHEMA(('INTEGRATED_CNC_SCHEMA'));", "FILE_SCHEMA((42));"),
+    text.replace("FILE_SCHEMA(('INTEGRATED_CNC_SCHEMA'));", "FILE_SCHEMA(('OTHER'));"),
+    text.replace("FILE_DESCRIPTION", "FILE_NAME")
+  ]) assert.throws(() => inspect(bad), /header|schema|Expected ENDSEC/);
+});
+
+test("parser bounds nesting and reports the owning record and CRLF source line", () => {
+  const {p, s} = sample(); s.linear([3, 0, 0], feed); const text = p.toSTEP();
+  const append = record => text.replace("\nENDSEC;\nEND-ISO", "\n" + record + "\nENDSEC;\nEND-ISO");
+  for (const body of ["()", "(LENGTH_UNIT()LENGTH_UNIT())"]) assert.throws(() => parse(append("#999999=" + body + ";")), /complex entity/);
+  assert.throws(() => parse(append("#999999=REPRESENTATION(',(),#1);")), /Unterminated/);
+  assert.throws(() => parse(append("#999999=REPRESENTATION(" + "(".repeat(65) + "0" + ")".repeat(65) + ");")), /nesting/);
+  const broken = append("#999999=REPRESENTATION('',(#999998),#1);").replace(/\n/g, "\r\n");
+  assert.throws(() => inspect(broken), e => {
+    assert.match(e.message, /Missing reference #999998/); assert.equal(e.context.record, "#999999");
+    assert.equal(e.context.sourceLine, broken.split("\r\n").findIndex(l => l.startsWith("#999999=")) + 1); return true;
+  });
+});
+
+test("execution graph rejects orphan state, detached links and invalid tool owners", () => {
+  const {p, s} = sample(); s.linear([3, 0, 0], feed); const text = p.toSTEP();
+  for (const type of ["MACHINING_TECHNOLOGY", "MACHINING_FUNCTIONS", "MACHINING_TECHNOLOGY_RELATIONSHIP", "MACHINING_FUNCTIONS_RELATIONSHIP"]) {
+    const [id] = [...parse(text).records].find(([, parts]) => parts.some(e => e.type === type));
+    let line = text.split("\n").find(l => l.startsWith("#" + id + "="));
+    line = line.replace(/^#\d+=/, "#999999=");
+    if (type.endsWith("RELATIONSHIP")) line = line.replace(/,(#\d+),(#\d+)\);$/, ",#1,$2);");
+    const broken = text.replace("\nENDSEC;\nEND-ISO", "\n" + line + "\nENDSEC;\nEND-ISO");
+    assert.throws(() => inspect(broken), e => { assert.match(e.message, /orphan/); assert.equal(e.context.record, "#999999"); return true; });
+  }
+  assert.throws(() => inspect(change(text, "MACHINING_TOOL", l => l.replace(/\(#\d+\)/, "(#1)"))), /tool owner/);
+  assert.throws(() => inspect(change(text, "MACHINING_TOOL", l => l.replace(/\(#\d+\)/, "()"))), /tool association/);
 });

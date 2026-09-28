@@ -46,6 +46,32 @@ function failureReport(logs) {
   assert.ok(report, "Failure must include the detailed report");
   return JSON.parse(report.split("NEXTNC DIAGNOSTIC BEGIN\n")[1].split("\nNEXTNC DIAGNOSTIC END")[0]);
 }
+
+test("precheck aggregates unsupported process equipment, transforms and off-plane entry", () => {
+  const {c, logs, output} = engine();
+  Object.assign(c.currentSection, {getAxisSubstitution: () => true, hasDynamicWorkOffset: () => 1,
+    getTailstock: () => 1, getPartCatcher: () => true, getInitialPosition: () => ({x: 12, y: 0.01, z: 2})});
+  assert.throws(() => c.onOpen(), /precheck failed/);
+  const report = failureReport(logs), section = report.sections[0];
+  for (const code of ["AXIS_SUBSTITUTION", "TAILSTOCK", "PART_CATCHER", "ENTRY_Y"]) assert.ok(section.issues.some(s => s.includes("[" + code + "]")));
+  assert.equal(section.tailstock, true); assert.equal(section.dynamicWorkOffsetDefined, true); assert.equal(output.length, 0);
+});
+
+test("optional section flags accept explicit false encodings and reject ambiguous values", () => {
+  for (const value of [false, 0]) {
+    const {c} = engine(); Object.assign(c.currentSection, {getAxisSubstitution: () => value, hasDynamicWorkOffset: () => value, tailstock: value, partCatcher: value});
+    c.onOpen(); c.onSection(); c.onLinear(12, 0, 0, 0.1); c.onClose();
+  }
+  const {c, output} = engine(); c.currentSection.getTailstock = () => "false";
+  assert.throws(() => c.onOpen(), /\[METADATA\].*getTailstock/); assert.equal(output.length, 0);
+});
+
+test("defined dynamic offset metadata alone does not mean an unsupported transform was requested", () => {
+  const {c, logs} = engine(); c.currentSection.hasDynamicWorkOffset = () => true; c.currentSection.getDynamicWorkOffset = () => 0;
+  c.onOpen(); c.onSection(); c.onLinear(12, 0, 0, 0.1); c.onClose();
+  const report = JSON.parse(logs.find(l => l.startsWith("NEXTNC PRECHECK ")).slice("NEXTNC PRECHECK ".length));
+  assert.equal(report.sections[0].dynamicWorkOffsetDefined, true); assert.equal(report.sections[0].dynamicWorkOffset, 0);
+});
 test("Autodesk configuration version is independent of the release", () => {
   const {c} = engine(); assert.equal(c.version, "1.0"); assert.equal(c.NextNC.version, require("../package.json").version);
 });
