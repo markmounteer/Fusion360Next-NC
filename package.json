@@ -1,16 +1,28 @@
 {
   "name": "fusion360next-nc",
-  "version": "0.1.7",
-  "description": "Experimental Fusion turning post and AP238 toolpath writer",
+  "version": "0.2.0",
+  "description": "Fusion XZ turning and XYZ milling post with AP238 toolpath profiles",
   "license": "MIT",
   "main": "src/next-nc.js",
-  "files": ["src/next-nc.js", "posts/next-nc.cps", "lib", "scripts/inspect.js", "docs", "examples"],
-  "repository": {"type": "git", "url": "https://github.com/markmounteer/Fusion360Next-NC.git"},
-  "engines": {"node": ">=20"},
+  "files": [
+    "src/next-nc.js",
+    "posts/next-nc.cps",
+    "lib",
+    "scripts/inspect.js",
+    "docs",
+    "examples"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/markmounteer/Fusion360Next-NC.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "node scripts/build.js",
     "check:build": "node scripts/build.js --check",
-    "test": "node --test test/writer.test.js test/fusion.test.js test/inspect.test.js",
+    "test": "node --test test/writer.test.js test/fusion.test.js test/inspect.test.js test/milling.test.js",
     "inspect": "node scripts/inspect.js",
     "example": "node examples/turning.js",
     "test:autodesk": "node scripts/test-autodesk.js",

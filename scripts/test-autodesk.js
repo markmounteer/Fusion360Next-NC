@@ -25,7 +25,7 @@ function interrogationDescription(cps) {
 try {
   const cps = path.join(root, "posts/next-nc.cps");
   const metadata = run(["--interrogate", cps]);
-  assert.match(metadata, /"extension":"stpnc"/); assert.match(metadata, /"capabilities":"TURNING"/);
+  assert.match(metadata, /"extension":"stpnc"/); assert.match(metadata, /"capabilities":"[^"]*TURNING/); assert.match(metadata, /"capabilities":"[^"]*MILLING/);
   const runtime = path.join(temporary, "runtime.cps");
   // Interrogation evaluates top-level JS in the native engine. Put synthetic output
   // in metadata so the independent reader can check it without a licensed CAM fixture.

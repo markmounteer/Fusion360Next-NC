@@ -7,7 +7,7 @@ const vm = require("node:vm");
 const {parse} = require("./support/part21");
 function engine(overrides = {}) {
   const output = [], logs = [];
-  const constants = ["MM", "IN", "CAPABILITY_TURNING", "PLANE_ZX", "PLANE_XY", "TYPE_TURNING", "SPINDLE_PRIMARY",
+  const constants = ["MM", "IN", "CAPABILITY_MILLING", "TYPE_MILLING", "PLANE_YZ", "CAPABILITY_TURNING", "PLANE_ZX", "PLANE_XY", "TYPE_TURNING", "SPINDLE_PRIMARY",
     "SPINDLE_CONSTANT_SURFACE_SPEED", "SPINDLE_CONSTANT_SPINDLE_SPEED", "FEED_PER_MINUTE", "FEED_PER_REVOLUTION", "COOLANT_OFF", "COOLANT_FLOOD", "COOLANT_MIST", "COOLANT_THROUGH_TOOL",
     "RADIUS_COMPENSATION_OFF", "RADIUS_COMPENSATION_LEFT", "RADIUS_COMPENSATION_RIGHT", "COMMAND_START_SPINDLE", "COMMAND_COOLANT_ON", "COMMAND_COOLANT_OFF", "COMMAND_STOP_SPINDLE",
     "COMMAND_SPINDLE_CLOCKWISE", "COMMAND_SPINDLE_COUNTERCLOCKWISE", "COMMAND_END"];
@@ -46,6 +46,51 @@ function failureReport(logs) {
   assert.ok(report, "Failure must include the detailed report");
   return JSON.parse(report.split("NEXTNC DIAGNOSTIC BEGIN\n")[1].split("\nNEXTNC DIAGNOSTIC END")[0]);
 }
+
+test("XYZ milling uses length offset and planar arcs; helices use Fusion linearization", () => {
+  const {c, output, logs} = engine();
+  c.currentSection.getType = () => c.TYPE_MILLING;
+  c.currentSection.getStrategy = () => "contour2d";
+  c.currentSection.feedMode = c.FEED_PER_MINUTE;
+  c.currentSection.getInitialPosition = () => ({x: 2, y: 1, z: 5});
+  c.tool.lengthOffset = 7;
+  c.onOpen(); c.onSection(); c.onRapid(2, 1, 0); c.onLinear(2, 1, -1, 100);
+  c.getCircularPlane = () => c.PLANE_XY;
+  c.onCircular(0, 1, 1, -1, 1, 2, -1, 100);
+  c.isHelical = () => true;
+  c.canLinearize = () => true;
+  c.linearize = tolerance => { assert.ok(tolerance > 0); c.onLinear(0.5, 1.5, -1.5, 100); c.onLinear(1, 1, -2, 100); };
+  c.onCircular(0, 1, 1, -1, 1, 1, -2, 100); c.onClose();
+  const {model, report} = require("../lib/inspect").inspect(output.join("\n") + "\n");
+  assert.equal(report.machine, "mill"); assert.equal(model.sections[0].tool.offset, 7);
+  assert.equal(model.sections[0].paths.find(p => p.kind === "arc").plane, "XY");
+  assert.deepEqual(model.sections[0].paths.at(-1).points.at(-1), [1, 1, -2]);
+  assert.ok(logs.some(l => l.includes("HELIX LINEARIZED")));
+});
+
+test("native helix roundoff retains generated vertices and the exact endpoint; incomplete output fails", () => {
+  for (const delta of [2e-15, 0.000001]) {
+    const {c, output} = engine(); c.currentSection.getType = () => c.TYPE_MILLING; c.tool.lengthOffset = 1;
+    c.currentSection.feedMode = c.FEED_PER_MINUTE; c.getCircularPlane = () => c.PLANE_XY;
+    c.isHelical = () => true; c.canLinearize = () => true;
+    c.linearize = () => c.onLinear(12, -8 - delta, -2, 100);
+    c.onOpen(); c.onSection();
+    if (delta > 1e-10) { assert.throws(() => c.onCircular(0, 10, -8, 2, 12, -8, -2, 100), /endpoint/); assert.equal(output.length, 0); }
+    else { c.onCircular(0, 10, -8, 2, 12, -8, -2, 100); c.onClose();
+      const points = require("../lib/inspect").inspect(output.join("\n") + "\n").model.sections[0].paths[0].points;
+      assert.deepEqual(points.slice(-2), [[12, -8 - delta, -2], [12, -8, -2]]);
+    }
+  }
+});
+
+test("mixed milling/turning and milling CSS fail in precheck", () => {
+  const {c, output} = engine();
+  c.sections.push({...c.currentSection, getType: () => c.TYPE_MILLING}); c.tool.lengthOffset = 1;
+  assert.throws(() => c.onOpen(), /MIXED_MACHINE/); assert.equal(output.length, 0);
+  const mill = engine(); mill.c.currentSection.getType = () => mill.c.TYPE_MILLING; mill.c.tool.lengthOffset = 1;
+  mill.c.tool.getSpindleMode = () => mill.c.SPINDLE_CONSTANT_SURFACE_SPEED;
+  assert.throws(() => mill.c.onOpen(), /constant RPM/); assert.equal(mill.output.length, 0);
+});
 
 test("precheck aggregates unsupported process equipment, transforms and off-plane entry", () => {
   const {c, logs, output} = engine();
@@ -242,7 +287,7 @@ test("work offsets and tools survive multiple sections without manufactured conn
   assert.equal(doc.all("POLYLINE").length, 2);
 });
 for (const [name, mutate, callback] of [
-  ["milling", c => { c.currentSection.getType = () => -1; }, "onSection"],
+  ["unknown section type", c => { c.currentSection.getType = () => -1; }, "onSection"],
   ["multi axis", c => { c.currentSection.isMultiAxis = () => true; }, "onSection"],
   ["secondary spindle", c => { c.currentSection.spindle = -1; }, "onSection"],
   ["optional section", c => { c.currentSection.isOptional = () => true; }, "onSection"],

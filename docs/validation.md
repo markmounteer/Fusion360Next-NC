@@ -1,3 +1,12 @@
+# v0.2.0 validation update
+
+- 70 Node test groups cover the previous turning behavior plus XYZ geometry, all principal planes, arc bounds/senses/full circles, profile separation, tool-length offsets, mixed-machine/CSS rejection, milling callback flow, helix linearization and bounded endpoint roundoff.
+- Actual Autodesk post engine 5.413.5 successfully posts checksum-pinned Autodesk milling facing, 2D bore with helices, and toolchange samples, as well as the existing turning facing/profile cases. Compensation and compatibility failures still produce diagnostic reports.
+- Source and standalone CPS are checked for exact build agreement. The inspector preserves legacy turning decoded models/fingerprints.
+- No current user CAM job, Fusion GUI session, physical machine or third-party AP238 consumer was tested. The post is not Autodesk-certified.
+
+The earlier validation record follows for provenance; its release-specific counts are historical.
+
 # Validation record
 
 Version 0.1.7, 2026-09-28 UTC.

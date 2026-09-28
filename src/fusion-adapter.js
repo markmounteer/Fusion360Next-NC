@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * Fusion callbacks. Bundled after next-nc.js to produce a standalone CPS.
  */
-description = "Next-NC - experimental AP238 XZ turning";
+description = "Next-NC - experimental AP238 XZ turning / XYZ milling";
 vendor = "Fusion360Next-NC";
 vendorUrl = "https://github.com/markmounteer/Fusion360Next-NC";
 legal = "Copyright (c) 2026 Mark Mounteer. MIT License.";
@@ -10,8 +10,8 @@ version = "1.0";
 certificationLevel = 0;
 minimumRevision = 45917;
 extension = "stpnc";
-longDescription = "Next-NC " + NextNC.version + ". Experimental toolpath-level STEP-NC/AP238 exporter for single-spindle XZ turning. Requires a Next-NC-aware consumer; LinuxCNC cannot load this file directly. No controller or machine options are duplicated here.";
-capabilities = CAPABILITY_TURNING;
+longDescription = "Next-NC " + NextNC.version + ". Experimental toolpath-level STEP-NC/AP238 exporter for single-spindle XZ turning or fixed XYZ milling. Requires a Next-NC-aware consumer; LinuxCNC cannot load this file directly. No controller or machine options are duplicated here.";
+capabilities = CAPABILITY_TURNING | CAPABILITY_MILLING;
 setCodePage("ascii");
 properties = {};
 tolerance = spatial(0.002, MM);
@@ -20,9 +20,9 @@ minimumCircularRadius = spatial(0.001, MM);
 maximumCircularRadius = spatial(100000, MM);
 minimumCircularSweep = toRad(0.001);
 maximumCircularSweep = 2 * Math.PI;
-allowHelicalMoves = false;
+allowHelicalMoves = true; // Milling helices are linearized by Fusion at the operation tolerance.
 allowSpiralMoves = false;
-allowedCircularPlanes = 1 << PLANE_ZX;
+allowedCircularPlanes = (1 << PLANE_ZX) | (1 << PLANE_XY) | (1 << PLANE_YZ);
 
 var nextProgram;
 var nextSection;
@@ -48,7 +48,7 @@ function nextLog(message) {
 }
 function nextContext() {
   return {
-    schema: "next-nc/diagnostic/1", release: NextNC.version, profile: NextNC.profile,
+    schema: "next-nc/diagnostic/1", release: NextNC.version, profile: nextProgram ? nextProgram.profile : "selected during precheck",
     configurationVersion: version, minimumRevision: minimumRevision, certificationLevel: certificationLevel,
     engine: nextRead(function () { return getVersion(); }),
     securityLevel: nextRead(function () { return getSecurityLevel(); }),
@@ -63,7 +63,7 @@ function nextSnapshot(section, index, issues) {
   return nextRead(function () {
     var t = section.getTool(), comp = nextCompensation(section);
     return {label: nextLabel(section, index), section: index + 1, type: section.getType(),
-      tool: t.number, toolOffset: t.compensationOffset, workOffset: section.workOffset,
+      tool: t.number, toolOffset: nextToolOffset(section, t), workOffset: section.workOffset,
       compensation: comp || "metadata missing; runtime guard active", feedMode: section.feedMode,
       strategy: nextRead(function () { return section.getStrategy(); }),
       entry: nextRead(function () { return nextPoint(section.getInitialPosition()); }),
@@ -147,10 +147,14 @@ function nextSectionFlag(section, method, property) {
   var value = typeof section[method] === "function" ? section[method]() : (property ? section[property] : undefined);
   return value === undefined ? undefined : nextBoolean(value, "Fusion " + method);
 }
+function nextToolOffset(section, sectionTool) {
+  return section.getType() === TYPE_MILLING ? sectionTool.lengthOffset : sectionTool.compensationOffset;
+}
 function nextSectionIssues(section) {
   var issues = [];
-  if (section.getType() !== TYPE_TURNING || section.isMultiAxis()) {
-    issues.push("[SECTION] Only fixed XZ turning is supported. Select fixed turning operations for this post.");
+  var milling = section.getType() === TYPE_MILLING;
+  if ((!milling && section.getType() !== TYPE_TURNING) || section.isMultiAxis()) {
+    issues.push("[SECTION] Only fixed XZ turning or fixed XYZ milling is supported. Rotary/multi-axis operations are unsupported.");
   }
   if (section.isOptional()) { issues.push("[OPTIONAL] Optional sections are unsupported. Make this operation non-optional or exclude it."); }
   if (section.spindle !== SPINDLE_PRIMARY) { issues.push("[SPINDLE] Secondary-spindle operations are unsupported. Use a primary-spindle setup."); }
@@ -166,7 +170,7 @@ function nextSectionIssues(section) {
   }
   var wp = section.workPlane;
   if (!isSameDirection(wp.forward, new Vector(0, 0, 1)) || !isSameDirection(wp.right, new Vector(1, 0, 0))) {
-    issues.push("[WORKPLANE] Rotated/mirrored work planes are unsupported. Use an unrotated turning work plane (+X right, +Z forward).");
+    issues.push("[WORKPLANE] Rotated/mirrored work planes are unsupported. Use an unrotated work plane (+X right, +Z forward).");
   }
   var comp = nextCompensation(section);
   if (comp && comp.value !== "computer" && comp.value !== "off") {
@@ -182,19 +186,20 @@ function nextSectionIssues(section) {
   }
   var sectionTool = section.getTool(), mode = sectionTool.getSpindleMode();
   if (!nextInteger(sectionTool.number, 1)) { issues.push("[TOOL_NUMBER] Set a positive integer tool number in Fusion's tool definition."); }
-  if (!nextInteger(sectionTool.compensationOffset, 0)) { issues.push("[TOOL_OFFSET] Set a nonnegative integer compensation offset in Fusion's tool definition."); }
+  if (!nextInteger(nextToolOffset(section, sectionTool), 0)) { issues.push("[TOOL_OFFSET] Set a nonnegative integer turning compensation offset or milling length offset in Fusion's tool definition."); }
   if (!nextInteger(section.workOffset, 0)) { issues.push("[WORK_OFFSET] Set a nonnegative integer WCS offset in the Fusion setup. Offset 0 remains unspecified and needs an explicit consumer mapping."); }
   if ([true, false, 0, 1].indexOf(sectionTool.clockwise) < 0) { issues.push("[DIRECTION] Fusion did not supply an explicit spindle direction. Review the tool/operation and regenerate it."); }
   var initial = section.getInitialPosition();
   if (!initial || [initial.x, initial.y, initial.z].some(function (v) { return typeof v !== "number" || !isFinite(v) || Math.abs(v) >= 1e15; })) {
     issues.push("[ENTRY] Fusion supplied an invalid initial position. Regenerate this operation's toolpath.");
-  } else if (Math.abs(initial.y) > 1e-9) {
+  } else if (!milling && Math.abs(initial.y) > 1e-9) {
     issues.push("[ENTRY_Y] Initial Y is outside the supported zero-Y XZ plane. Review the setup/work plane and regenerate this operation.");
   }
   if (section.hasParameter("operation:tolerance") && !nextPositive(section.getParameter("operation:tolerance"))) {
     issues.push("[TOLERANCE] Fusion's operation tolerance must be a positive finite value. Review the operation and regenerate its toolpath.");
   }
   if (mode === SPINDLE_CONSTANT_SURFACE_SPEED) {
+    if (milling) { issues.push("[SPINDLE_MODE] XYZ milling requires constant RPM; CSS is a turning-only mode."); }
     if (!nextPositive(sectionTool.surfaceSpeed)) { issues.push("[CSS_SPEED] Set a positive surface speed in the Fusion operation's Tool tab."); }
     if (!nextPositive(sectionTool.maximumSpindleSpeed)) { issues.push("[CSS_LIMIT] Set a positive maximum spindle speed for CSS in the Fusion operation's Tool tab."); }
   } else if (mode === SPINDLE_CONSTANT_SPINDLE_SPEED) {
@@ -210,10 +215,12 @@ function nextSectionIssues(section) {
 }
 function nextPrecheck() {
   var problems = [], affected = 0, count = getNumberOfSections();
-  if (!count) { throw new Error("Next-NC precheck: no machining sections selected. Select a turning operation and post again."); }
+  if (!count) { throw new Error("Next-NC precheck: no machining sections selected. Select a turning or milling operation and post again."); }
   for (var i = 0; i < count; ++i) {
     var section = undefined, issues;
-    try { section = getSection(i); issues = nextSectionIssues(section); }
+    try { section = getSection(i); issues = nextSectionIssues(section);
+      if (section.getType() !== getSection(0).getType()) { issues.push("[MIXED_MACHINE] Post turning and milling setups as separate programs."); }
+    }
     catch (e) { issues = ["[METADATA] Fusion section metadata could not be read: " + nextDiagnosticText(e.message || e) + ". Regenerate this operation and check the full diagnostic log."]; }
     if (nextSectionDiagnostics.length < 200) { nextSectionDiagnostics.push(nextSnapshot(section, i, issues)); }
     if (issues.length) {
@@ -256,6 +263,18 @@ function nextArcTolerance() {
   }
   return limit;
 }
+function nextFinishHelix(x, y, z, feed, limit) {
+  var end = [x, y, z], position = nextSection.position, differs = false;
+  for (var i = 0; i < 3; ++i) {
+    // Native linearize() may end a few floating-point ulps from the callback
+    // endpoint. Keep its vertices, then retain the exact supplied endpoint too.
+    // This allowance is bounded far below the CAM tolerance, not a snap radius.
+    var roundoff = Math.min(limit * 1e-6, Math.max(1, Math.abs(end[i]), Math.abs(position[i])) * 32 * 2.220446049250313e-16);
+    if (Math.abs(position[i] - end[i]) > roundoff) { throw new Error("Next-NC: Fusion helix linearization did not reach its endpoint. Expected " + JSON.stringify(end) + "; received " + JSON.stringify(position) + "."); }
+    differs = differs || position[i] !== end[i];
+  }
+  if (differs) { nextSection.linear(end, nextFeed(feed)); }
+}
 function nextFeed(value) { return {value: value, mode: nextFeedMode}; }
 function nextSetFeedMode(mode) {
   if (mode === FEED_PER_MINUTE) { nextFeedMode = "perMinute"; }
@@ -275,7 +294,8 @@ function onOpen() {
     nextStartedUTC = new Date().toISOString();
     nextLog("NEXTNC START " + JSON.stringify(nextContext()));
     nextPrecheck();
-    nextProgram = new NextNC.Program({name: programName || "Fusion turning", units: unit === MM ? "mm" : "inch"});
+    nextProgram = new NextNC.Program({name: programName || "Fusion machining", units: unit === MM ? "mm" : "inch",
+      machine: getSection(0).getType() === TYPE_MILLING ? "mill" : "lathe"});
   });
 }
 function onSection() {
@@ -283,6 +303,7 @@ function onSection() {
     nextOperationLabel = nextLabel(currentSection, getCurrentSectionId());
     var issues = nextSectionIssues(currentSection);
     if (issues.length) { throw new Error("Next-NC: " + nextOperationLabel + ":\n  - " + issues.join("\n  - ")); }
+    if ((currentSection.getType() === TYPE_MILLING) !== (nextProgram.machine === "mill")) { throw new Error("Next-NC: section machine type changed after precheck."); }
     setRotation(currentSection.workPlane);
     nextSetFeedMode(currentSection.feedMode);
     var mode = tool.getSpindleMode();
@@ -290,8 +311,8 @@ function onSection() {
     nextSpindle = {mode: css ? "css" : "rpm", speed: css ? tool.surfaceSpeed : Math.abs(spindleSpeed),
       clockwise: nextBoolean(tool.clockwise, "Fusion spindle direction"), maximumRPM: tool.maximumSpindleSpeed};
     nextSection = nextProgram.addSection({
-      name: hasParameter("operation-comment") ? getParameter("operation-comment") : "Turning " + (getCurrentSectionId() + 1),
-      tool: {number: tool.number, offset: tool.compensationOffset, description: tool.comment || ""},
+      name: hasParameter("operation-comment") ? getParameter("operation-comment") : (nextProgram.machine === "mill" ? "Milling " : "Turning ") + (getCurrentSectionId() + 1),
+      tool: {number: tool.number, offset: nextToolOffset(currentSection, tool), description: tool.comment || ""},
       workOffset: currentSection.workOffset,
       start: nextPoint(getFramePosition(currentSection.getInitialPosition())),
       spindle: nextSpindle, coolant: nextCoolant(tool.coolant)
@@ -303,10 +324,22 @@ function onLinear(x, y, z, feed) { nextGuard(function () { nextNeedSection(); ne
 function onCircular(clockwise, cx, cy, cz, x, y, z, feed) {
   nextGuard(function () {
     nextNeedSection();
-    if (getCircularPlane() !== PLANE_ZX || isHelical()) { throw new Error("Next-NC: only planar XZ arcs are supported."); }
+    var milling = nextProgram.machine === "mill", plane = getCircularPlane();
+    if ((!milling && (plane !== PLANE_ZX || isHelical())) || [PLANE_XY, PLANE_ZX, PLANE_YZ].indexOf(plane) < 0) {
+      throw new Error("Next-NC: only planar XZ arcs for turning and principal-plane arcs for XYZ milling are supported.");
+    }
+    if (milling && isHelical()) {
+      if (!canLinearize()) { throw new Error("Next-NC: Fusion cannot linearize this milling helix."); }
+      var helixTolerance = nextArcTolerance();
+      linearize(helixTolerance);
+      nextFinishHelix(x, y, z, feed, helixTolerance);
+      ++nextLinearizedArcs;
+      nextLog("NEXTNC HELIX LINEARIZED " + JSON.stringify({operation: nextOperationLabel, tolerance: nextArcTolerance()}));
+      return;
+    }
     clockwise = nextBoolean(clockwise, "Fusion onCircular clockwise flag");
     var fullCircle = nextBoolean(isFullCircle(), "Fusion full-circle flag");
-    try { nextSection.arc([x, y, z], [cx, cy, cz], clockwise, nextFeed(feed), fullCircle); }
+    try { nextSection.arc([x, y, z], [cx, cy, cz], clockwise, nextFeed(feed), fullCircle, plane === PLANE_XY ? "XY" : plane === PLANE_YZ ? "YZ" : "XZ"); }
     catch (e) {
       if (e.code !== "ARC_RADII" || fullCircle) { throw e; }
       var limit = nextArcTolerance(), remaining = limit - e.radialDifference;
@@ -317,7 +350,7 @@ function onCircular(clockwise, cx, cy, cz, x, y, z, feed) {
       // The strict writer has not appended the rejected arc or advanced position.
       // Ask Fusion to generate the approximation; do not invent a new arc center.
       linearize(remaining);
-      if (nextSection.position[0] !== x || nextSection.position[2] !== z) {
+      if (nextSection.position[0] !== x || nextSection.position[1] !== y || nextSection.position[2] !== z) {
         throw new Error("Next-NC: Fusion arc linearization did not reach the supplied endpoint; export stopped.");
       }
       ++nextLinearizedArcs;

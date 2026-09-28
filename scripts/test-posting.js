@@ -17,14 +17,18 @@ const cache = path.join(root, ".cache", "autodesk", commit);
 const cases = [
   ["face", "decb11eef33e02d0a6928d99f78380c6af20df2e96983c77043a5ac2065fc12a"],
   ["profile no compensation", "db1cd6082845e2bcf0c53b37cf92527ff69309fb3b51e1fd6ed2fbea310198fc"],
-  ["profile with compensation", "22610053be4759494b659675a297b948f798cfa869347fd960ab509128dd031a"]
+  ["profile with compensation", "22610053be4759494b659675a297b948f798cfa869347fd960ab509128dd031a"],
+  ["mill-face", "c6a5792912b1806ddf330e8060cefb6e3a97a5d8a0e1479bf30483b72b8954b7", "Milling/2D/face"],
+  ["mill-bore", "ff2eab89951df4a302612d75dad1fdca38bee45fc84e81d9efbd699a1fa92f01", "Milling/2D/bore"],
+  ["mill-toolchange", "8406eb9225d8b51b5ce7c6bc0ec79ab496dcce8db826f2815f71f1eb80d122f7", "Milling/2D/toolchange"]
 ];
 async function main() {
   fs.mkdirSync(cache, {recursive: true});
-  for (const [name, checksum] of cases) {
+  for (const [name, checksum, location] of cases) {
     const file = path.join(cache, name + ".cnc");
     if (!fs.existsSync(file)) {
-      const url = `https://raw.githubusercontent.com/Autodesk/cam-posteditor/${commit}/vs-code-extension/res/CNC%20files/Turning/${encodeURIComponent(name)}.cnc`;
+      const fixturePath = (location || "Turning/" + name).split("/").map(encodeURIComponent).join("/");
+      const url = `https://raw.githubusercontent.com/Autodesk/cam-posteditor/${commit}/vs-code-extension/res/CNC%20files/${fixturePath}.cnc`;
       const response = await fetch(url, {signal: AbortSignal.timeout(30000)});
       assert.ok(response.ok, `Sample download failed: ${response.status}`);
       const bytes = Buffer.from(await response.arrayBuffer());
@@ -47,6 +51,13 @@ async function main() {
     return {log, output: fs.existsSync(out) ? fs.readFileSync(out, "utf8") : ""};
   }
   try {
+    for (const fixture of ["mill-face", "mill-bore", "mill-toolchange"]) {
+      const result = post(fixture, source, fixture, 0), decoded = inspect(result.output);
+      assert.equal(decoded.report.machine, "mill");
+      assert.ok(decoded.report.paths > 0); assert.ok(decoded.report.bounds.max[1] !== decoded.report.bounds.min[1]);
+      if (fixture === "mill-bore") assert.match(result.log, /NEXTNC HELIX LINEARIZED/);
+      console.log(`PASS: actual Autodesk ${fixture}: ${decoded.report.sections} sections, ${decoded.report.paths} paths.`);
+    }
     const old = post("bad-version", source.replace('version = "1.0";', "version = NextNC.version;"), "face", 500);
     assert.match(old.log, /Post configuration is not compatible with this version/);
     assert.doesNotMatch(old.log, /NEXTNC START/);

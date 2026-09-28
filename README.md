@@ -2,7 +2,7 @@
 
 [![Tests](https://github.com/markmounteer/Fusion360Next-NC/actions/workflows/ci.yml/badge.svg)](https://github.com/markmounteer/Fusion360Next-NC/actions/workflows/ci.yml)
 
-An experimental Autodesk Fusion post processor and JavaScript library for **toolpath-level STEP-NC/AP238**, initially for a single-spindle XZ lathe.
+An experimental Autodesk Fusion post processor and JavaScript library for **toolpath-level STEP-NC/AP238**, for a single-spindle XZ lathe or fixed-axis XYZ mill.
 
 **Next-NC is the project name.** The output is an ISO 10303-21 text file using the AP238 `INTEGRATED_CNC_SCHEMA`, with a small, documented Next-NC execution profile. It is not G-code, and stock LinuxCNC cannot execute it directly. The separate [LinuxCNCNext-NC translator](https://github.com/markmounteer/LinuxCNCNext-NC) provides an experimental G-code input-filter bridge with explicit machine/setup plans. A native STEP-NC interpreter remains unimplemented. AP238 conformance and third-party interoperability have not been certified or independently validated.
 
@@ -11,13 +11,15 @@ An experimental Autodesk Fusion post processor and JavaScript library for **tool
 Download [posts/next-nc.cps](posts/next-nc.cps). It is a standalone file; Node.js is not needed to use it in Fusion.
 
 1. Open Fusion's **Post Library** and select **My Posts → Local**.
-2. Import `next-nc.cps` and select **Next-NC - experimental AP238 XZ turning** when posting.
-3. Use fixed XZ turning operations, the primary spindle, an unrotated work plane, and compensation **In computer**.
+2. Import `next-nc.cps` and select **Next-NC - experimental AP238 XZ turning / XYZ milling** when posting.
+3. Use XZ turning or fixed-axis XYZ milling operations, the primary spindle, an unrotated work plane, and compensation **In computer**. Export each machine type separately.
 4. Post to a new `.stpnc` file for inspection and development. Do not send it to a machine expecting G-code.
 
 See Autodesk's [Post Library instructions](https://help.autodesk.com/cloudhelp/ENU/Fusion-CAM/files/MFG-ADD-POST-PROCESSOR-TO-LIBRARY.htm).
 
-**0.1.6 strengthens prechecking before any toolpath is processed.** It checks logical tool/WCS identifiers, initial coordinates, RPM, direction and supplied tolerance across selected sections, and continues diagnosing later sections if one section's metadata cannot be read. Successful prechecks log source facts as well. There are still zero post properties; the [translator](https://github.com/markmounteer/LinuxCNCNext-NC) owns optional checking against your existing LinuxCNC tool table. See the [research rationale](docs/research-review.md).
+**0.2.0 adds XYZ milling while preserving existing turning files and fingerprints.** Milling uses a separate profile, tool length-offset identity, all three principal arc planes and tolerance-controlled helix linearization by Fusion. It requires LinuxCNCNext-NC v0.5.0 or newer. [Milling contract](docs/milling.md).
+
+Prechecking runs before any toolpath is processed. It checks logical tool/WCS identifiers, initial coordinates, RPM, direction and supplied tolerance across selected sections, and continues diagnosing later sections if one section's metadata cannot be read. Successful prechecks log source facts as well. There are still zero post properties; the [translator](https://github.com/markmounteer/LinuxCNCNext-NC) owns optional checking against your existing LinuxCNC tool table. See the [research rationale](docs/research-review.md).
 
 Exact geometry sharing and export comparison from 0.1.5 remain included. Every move, feed, process state and operation stays distinct. Update the imported CPS; the existing Windows diagnostic collector does not need reinstalling.
 
@@ -25,17 +27,18 @@ Exact geometry sharing and export comparison from 0.1.5 remain included. Every m
 
 | Supported | Details |
 | --- | --- |
-| Ordered turning sections | Logical tools, Fusion work-offset numbers, tool-offset numbers, section entry points |
+| Ordered turning or milling sections | Logical tools, Fusion work-offset numbers, tool-offset numbers, section entry points |
 | Rapid and cutting lines | All vertices preserved; adjacent moves with identical process state share a polyline |
-| XZ circular arcs | Analytic circles and bounded trims, both directions, full circles |
+| Circular arcs | Lathe XZ; mill XY/XZ/YZ. Analytic circles and bounded trims, both directions, full circles |
+| Milling helices | Fusion linearizes with the tighter operation/post tolerance; all returned vertices retained |
 | Units | Millimetres or inches, explicit STEP units |
 | Feed | Length/minute or length/revolution |
-| Spindle | Constant RPM; CSS with Fusion's maximum RPM |
+| Spindle | Constant RPM; lathe CSS with Fusion's maximum RPM |
 | Coolant and dwell | Off, flood, mist, through tool; dwell in seconds |
 
-There are **zero user-defined post properties**. Fusion supplies machining decisions. A future controller consumer must own machine limits, tool changes, offset application, entry/retract policy, parking, overrides and motion planning.
+There are **zero user-defined post properties**. Fusion supplies machining decisions. The controller consumer owns machine limits, tool changes, offset application, entry/retract policy, parking, overrides and motion planning.
 
-The initial post rejects canned cycles, threading/tapping, controller cutter compensation, dual tool compensation, optional sections, secondary spindles, rotated setups, multi-axis motion, Manual NC, pass-through commands and explicit machine commands. An error prevents the writer from emitting a complete program. Unsupported cycles are not silently converted to ordinary feed moves.
+The post rejects canned cycles, threading/tapping, controller cutter compensation, dual tool compensation, optional sections, secondary spindles, rotated setups, multi-axis motion, Manual NC, pass-through commands and explicit machine commands. An error prevents the writer from emitting a complete program. Unsupported cycles are not silently converted to ordinary feed moves.
 
 The post buffers the program until it is accepted, so memory use grows with toolpath size. Geometry is a toolpath, not a reconstruction of Fusion's design, stock, fixtures or feature-based machining intent.
 
@@ -98,7 +101,7 @@ The inspector is independent of the writer, requires Node.js, and is not embedde
 
 Edit `src/next-nc.js` and `src/fusion-adapter.js`, then run `npm run build`. Commit the generated `posts/next-nc.cps` too. CI checks that the source and post match, runs tests on Node 20/22/24, and checks the reproducible example.
 
-To exercise the writer in Autodesk's installed JavaScript runtime, set `AUTODESK_POST` to your `post.exe` and run `npm run test:autodesk`. Run `npm run test:posting` for actual engine posting against checksum-pinned Autodesk sample turning inputs (downloaded to `.cache`, not redistributed). This verifies the compatibility gate, numeric arc flags, successful facing/profile output, arc rounding fallback, and precheck/runtime rejection. `npm run test:collector` checks the Windows log collector. These do not test the Fusion GUI or a machine.
+To exercise the writer in Autodesk's installed JavaScript runtime, set `AUTODESK_POST` to your `post.exe` and run `npm run test:autodesk`. Run `npm run test:posting` for actual engine posting against checksum-pinned Autodesk sample turning and milling inputs (downloaded to `.cache`, not redistributed). This verifies the compatibility gate, numeric arc flags, successful facing/profile output, arc rounding fallback, precheck/runtime rejection, milling facing/bore/toolchange, and native helix linearization. `npm run test:collector` checks the Windows log collector. These do not test the Fusion GUI or a machine.
 
 ## License and provenance
 
@@ -106,4 +109,4 @@ MIT, for this repository's original code. Autodesk Fusion and its post engine ar
 
 ## Architecture research update
 
-See [the architecture review and resulting improvements](docs/architecture-research.md) for the three-paper review, stronger input checks and indexed interpretation. The format and machining semantics remain unchanged.
+See [the architecture review and resulting improvements](docs/architecture-research.md) for the three-paper review, stronger input checks and indexed interpretation. The separate milling profile was added in v0.2.0; existing turning model semantics and fingerprints remain unchanged.
