@@ -22,7 +22,7 @@
   "scripts": {
     "build": "node scripts/build.js",
     "check:build": "node scripts/build.js --check",
-    "test": "node --test test/writer.test.js test/fusion.test.js test/inspect.test.js test/milling.test.js",
+    "test": "node --test test/writer.test.js test/fusion.test.js test/inspect.test.js test/milling.test.js test/geometry-diagnostics.test.js",
     "inspect": "node scripts/inspect.js",
     "example": "node examples/turning.js",
     "test:autodesk": "node scripts/test-autodesk.js",
