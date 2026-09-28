@@ -3,7 +3,7 @@
  */
 var NextNC = (function () {
   "use strict";
-  var VERSION = "0.1.3";
+  var VERSION = "0.1.4";
   var PROFILE = "next-nc/turning-toolpath/0.1";
   function requireValue(ok, message) { if (!ok) { throw new Error("Next-NC: " + message); } }
   function finite(n, label) {
@@ -128,9 +128,22 @@ var NextNC = (function () {
     return result + "'";
   }
   function list(items) { return "(" + items.join(",") + ")"; }
-  function Writer() { this.lines = []; }
+  // These records are immutable values. Never intern actions, paths, properties,
+  // relationships or operations: equal fields do not imply equal execution.
+  var sharedTypes = {
+    CARTESIAN_POINT: true, DIRECTION: true, DESCRIPTIVE_REPRESENTATION_ITEM: true,
+    MEASURE_REPRESENTATION_ITEM: true, REPRESENTATION: true, ACTION_RESOURCE_TYPE: true,
+    MACHINING_FEED_SPEED_REPRESENTATION: true, MACHINING_SPINDLE_SPEED_REPRESENTATION: true,
+    MACHINING_TOOLPATH_SPEED_PROFILE_REPRESENTATION: true, DERIVED_UNIT_ELEMENT: true
+  };
+  function Writer() { this.lines = []; this.valueCache = Object.create(null); this.reused = 0; }
   Writer.prototype.raw = function (value) { this.lines.push(value); return "#" + this.lines.length; };
-  Writer.prototype.add = function (type, args) { return this.raw(type + list(args)); };
+  Writer.prototype.add = function (type, args) {
+    var record = type + list(args);
+    if (!Object.prototype.hasOwnProperty.call(sharedTypes, type)) { return this.raw(record); }
+    if (this.valueCache[record]) { ++this.reused; return this.valueCache[record]; }
+    var reference = this.raw(record); this.valueCache[record] = reference; return reference;
+  };
   Writer.prototype.textItem = function (name, value) { return this.add("DESCRIPTIVE_REPRESENTATION_ITEM", [str(name), str(value)]); };
   Writer.prototype.point = function (p) { return this.add("CARTESIAN_POINT", ["''", list(p.map(real))]); };
   Writer.prototype.rep = function (type, name, items, context) { return this.add(type || "REPRESENTATION", [str(name), list(items), context || this.unitless]); };
@@ -271,6 +284,16 @@ var NextNC = (function () {
     requireValue(this.sections.length > 0, "program contains no sections");
     var w = new Writer(); w.units(this.units); var workplan = w.project(this);
     for (var i = 0; i < this.sections.length; ++i) { w.section(workplan, this.sections[i], i + 1); }
+    this.lastExport = {entities: w.lines.length, reusedValues: w.reused, sections: this.sections.length,
+      paths: 0, arcs: 0, rapidSegments: 0, cuttingSegments: 0, dwells: 0};
+    for (i = 0; i < this.sections.length; ++i) {
+      for (var j = 0; j < this.sections[i].paths.length; ++j) {
+        var path = this.sections[i].paths[j]; ++this.lastExport.paths;
+        if (path.kind === "arc") { ++this.lastExport.arcs; }
+        else if (path.kind === "dwell") { ++this.lastExport.dwells; }
+        else { this.lastExport[path.kind === "rapid" ? "rapidSegments" : "cuttingSegments"] += path.points.length - 1; }
+      }
+    }
     var lines = ["ISO-10303-21;", "HEADER;",
       "FILE_DESCRIPTION((" + str("Experimental AP238 toolpath; " + PROFILE) + "),'2;1');",
       "FILE_NAME(" + str(this.name + ".stpnc") + "," + str(this.timestamp) + ",(''),('')," + str("Fusion360Next-NC " + VERSION) + ",'Fusion360Next-NC','');",

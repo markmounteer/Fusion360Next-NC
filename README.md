@@ -17,7 +17,7 @@ Download [posts/next-nc.cps](posts/next-nc.cps). It is a standalone file; Node.j
 
 See Autodesk's [Post Library instructions](https://help.autodesk.com/cloudhelp/ENU/Fusion-CAM/files/MFG-ADD-POST-PROCESSOR-TO-LIBRARY.htm).
 
-**0.1.3 fixes `arc direction must be explicit`.** Fusion's native numeric arc flags (`0`/`1`) are normalized at the adapter boundary, preserving both directions. It also handles small endpoint-radius rounding differences through Fusion's own tolerance-bounded linearization. Update the imported CPS; the existing Windows diagnostic collector does not need reinstalling.
+**0.1.4 reduces repeated STEP records without changing motion.** Exact points, directions and other immutable values share records; operation and path identities, every vertex, arc sense, feeds and process states remain intact. Successful posts log export counts. A separate local inspector checks the exported execution profile. Update the imported CPS; the existing Windows diagnostic collector does not need reinstalling. The native arc-flag and bounded rounding fixes from 0.1.3 remain included.
 
 ## What it exports
 
@@ -78,6 +78,16 @@ const stepText = program.toSTEP();
 `speed` in CSS mode uses **program length units per minute**: `80000` mm/min means 80 m/min; `1200` inch/min means 100 ft/min. Positions use physical **X radius**, not diameter. The explicit `start` is an entry target; the exporter does not know the machine's current position or invent a safe path to that target.
 
 The [synthetic example](examples/turning.stpnc), [format contract](docs/format.md), [LinuxCNC integration plan](docs/linuxcnc.md), and [validation record](docs/validation.md) explain the current boundary.
+
+## Inspect an export
+
+```sh
+npm run inspect -- path/to/program.stpnc path/to/new-report.json
+```
+
+This read-only command checks the Next-NC profile, entity references, operation/path order, continuity **within** each operation, explicit geometry/feed/spindle units, feeds, CSS caps and arc geometry. It reports operation/tool/offset information, motion counts and coordinate bounds including arc extrema. Omit the second path to print the report only; existing files are never overwritten. Inspection works on previous Next-NC exports as well as the compact 0.1.4 format.
+
+The inspector is independent of the writer, requires Node.js, and is not embedded in the CPS. It does not validate the full AP238 EXPRESS schema, stock/tool clearance, transitions between operations or controller readiness. Smaller files reduce storage and record duplication; they do not imply shorter machining time. See [inspection details](docs/format.md#local-inspection).
 
 ## Development
 

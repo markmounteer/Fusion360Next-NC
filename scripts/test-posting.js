@@ -8,6 +8,7 @@ const crypto = require("node:crypto");
 const assert = require("node:assert/strict");
 const {spawnSync} = require("node:child_process");
 const {parse} = require("../test/support/part21");
+const {inspect} = require("../lib/inspect");
 const executable = process.env.AUTODESK_POST;
 if (!executable || !fs.existsSync(executable)) throw new Error("Set AUTODESK_POST to your installed Autodesk post.exe.");
 const root = path.resolve(__dirname, "..");
@@ -53,6 +54,10 @@ async function main() {
     assert.match(good.log, /Post processing completed successfully/);
     assert.match(good.log, /NEXTNC OUTPUT WRITTEN/);
     assert.ok(parse(good.output).all("MACHINING_TOOLPATH").length > 0);
+    assert.ok(inspect(good.output).report.paths > 0);
+    const summary = JSON.parse(good.log.match(/NEXTNC OUTPUT WRITTEN (\{[^\r\n]+\})/)[1]);
+    assert.equal(summary.summary.entities, parse(good.output).records.size);
+    assert.ok(summary.summary.reusedValues > 0);
     const oldArc = post("bad-arc-flag", source + '\nnextBoolean = function (value) { return value; };\n', "profile no compensation", 500);
     assert.match(oldArc.log, /arc direction must be explicit/);
     // Trace native callback types and senses without modifying them.
@@ -62,6 +67,8 @@ async function main() {
     assert.match(profile.log, /NEXTNC ARC LINEARIZED/);
     assert.match(profile.log, /Post processing completed successfully/);
     const profileDoc = parse(profile.output);
+    const inspected = inspect(profile.output);
+    assert.equal(inspected.report.arcs, profileDoc.all("CIRCLE").length);
     assert.ok(profileDoc.all("CIRCLE").length > 0);
     assert.ok(profileDoc.all("TRIMMED_CURVE").some(e => e.args[4].symbol === ".T."));
     assert.ok(profileDoc.all("TRIMMED_CURVE").every(e => e.args[4].symbol === ".T."));

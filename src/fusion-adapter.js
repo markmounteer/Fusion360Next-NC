@@ -322,7 +322,8 @@ function onClose() {
     var output = nextProgram.toSTEP().split("\n");
     for (var i = 0; i < output.length - 1; ++i) { writeln(output[i]); }
     nextLog("NEXTNC OUTPUT WRITTEN " + JSON.stringify({release: NextNC.version, callbacks: nextEventCount,
-      sections: getNumberOfSections(), lines: output.length - 1, linearizedArcs: nextLinearizedArcs}));
+      sections: getNumberOfSections(), lines: output.length - 1, linearizedArcs: nextLinearizedArcs,
+      summary: nextProgram.lastExport}));
   });
 }
 

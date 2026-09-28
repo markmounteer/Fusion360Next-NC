@@ -64,3 +64,19 @@ The CPS first prechecks every selected section's metadata and reports all affect
 The CPS buffers everything and writes only from `onClose` after successful serialization. A caught validation failure latches a failed state. A host may still create an empty or `.failed` output; only a complete, successfully posted document is an export. Buffering uses O(number of vertices) memory; large-job limits have not been benchmarked.
 
 The program has no stock B-rep, part B-rep, fixtures, geometric tool assembly, feed optimization or feature-level toolpath generation. It does not promise smaller files than G-code: STEP entities are verbose, although adjacent lines and common technology records are shared. Better runtime efficiency would require measured changes to CAM toolpaths or controller planning, not a file-format change alone.
+
+## Shared values in 0.1.4
+
+Within one document, identical serialized immutable values reuse an entity reference: points, directions, descriptive/measure items, representations, resource types and derived-unit elements. The cache key includes the complete serialized record, including referenced units and representation contexts. No coordinate rounding or geometric tolerance is used to merge values. Each serialization starts with a fresh cache.
+
+Operations, workingsteps, toolpaths, curves, properties and relationships retain separate identities. Equal coordinates do not merge different moves, remove repeated operations or override differing feed/spindle/coolant state. Consumers must follow the sequence relationships and resolve references; counting point definitions does not count motion vertices.
+
+`Program.lastExport`, available after `toSTEP()`, reports entity count, reused value records, sections, paths, arcs, straight rapid/cutting segments and dwells. Straight segment counts exclude arcs; an N-vertex polyline contains N−1 straight segments. The Fusion adapter includes these counts in the `NEXTNC OUTPUT WRITTEN` log entry, alongside native arc-linearization counts.
+
+## Local inspection
+
+`npm run inspect -- input.stpnc [new-report.json]` uses a separate Part 21 subset reader and execution-profile decoder. It checks references, ordered workingsteps/paths, tool and offset identities, positive feed/spindle measures, mm/inch and time/revolution unit definitions, rapid classification, XZ geometry, arc frames/radii/senses and path continuity within each operation. Orphan/repeated operations and paths are rejected. Arc endpoint residuals use the writer's existing numerical threshold: the greater of 1e-7 program units and radius × 1e-6. Continuity permits 1e-9 program units for numerical reconstruction of full circles.
+
+The JSON report includes full-precision values, per-operation feed and initial spindle settings, counts and overall coordinate bounds, including intermediate arc extrema. Bounds combine the numeric coordinates of all sections; different work offsets are not transformed into a common machine frame. They are not machine-travel or clearance checks. Section entry transitions remain the consumer's responsibility.
+
+The command is read-only and never uploads data. The optional report must be a new file. It returns exit code 0 when the implemented checks pass, 1 on a validation/file error, or 2 for incorrect arguments. It intentionally supports the emitted Next-NC subset rather than arbitrary AP238 files. Passing it does not establish full EXPRESS conformance, third-party interoperability, fidelity to an unavailable Fusion simulation or safe machining.
