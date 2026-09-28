@@ -17,7 +17,7 @@ Download [posts/next-nc.cps](posts/next-nc.cps). It is a standalone file; Node.j
 
 See Autodesk's [Post Library instructions](https://help.autodesk.com/cloudhelp/ENU/Fusion-CAM/files/MFG-ADD-POST-PROCESSOR-TO-LIBRARY.htm).
 
-**0.1.4 reduces repeated STEP records without changing motion.** Exact points, directions and other immutable values share records; operation and path identities, every vertex, arc sense, feeds and process states remain intact. Successful posts log export counts. A separate local inspector checks the exported execution profile. Update the imported CPS; the existing Windows diagnostic collector does not need reinstalling. The native arc-flag and bounded rounding fixes from 0.1.3 remain included.
+**0.1.5 also shares identical curve definitions without removing any moves.** Polylines, arc frames, circles and trims reuse exact geometry; every operation, path, direction and process state remains distinct. Reports distinguish geometry definitions from motion counts, and the independent inspector can compare exports and identify the first program change. Update the imported CPS; the existing Windows diagnostic collector does not need reinstalling. All previous arc and compaction fixes remain included.
 
 ## What it exports
 
@@ -83,9 +83,12 @@ The [synthetic example](examples/turning.stpnc), [format contract](docs/format.m
 
 ```sh
 npm run inspect -- path/to/program.stpnc path/to/new-report.json
+npm run inspect -- path/to/new.stpnc --compare path/to/previous.stpnc
 ```
 
 This read-only command checks the Next-NC profile, entity references, operation/path order, continuity **within** each operation, explicit geometry/feed/spindle units, feeds, CSS caps and arc geometry. It reports operation/tool/offset information, motion counts and coordinate bounds including arc extrema. Omit the second path to print the report only; existing files are never overwritten. Inspection works on previous Next-NC exports as well as the compact 0.1.4 format.
+
+`--compare` validates both files and compares the decoded program exactly, without a rounding tolerance. It ignores the export timestamp, writer version, entity numbering and shared-record layout. Changes to names, units, tooling, offsets, ordered geometry, feeds, spindle or coolant state are reported with the first differing field and before/after values. Exit code 3 means valid but different programs; 0 means the comparison matched. Reports also include a versioned SHA-256 fingerprint of the decoded program.
 
 The inspector is independent of the writer, requires Node.js, and is not embedded in the CPS. It does not validate the full AP238 EXPRESS schema, stock/tool clearance, transitions between operations or controller readiness. Smaller files reduce storage and record duplication; they do not imply shorter machining time. See [inspection details](docs/format.md#local-inspection).
 

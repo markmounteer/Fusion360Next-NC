@@ -1,11 +1,13 @@
 # Validation record
 
-Version 0.1.4, 2026-09-28 UTC.
+Version 0.1.5, 2026-09-28 UTC.
 
 ## Verified locally
 
-- Node.js 24.13.1: 53 writer, synthetic Fusion callback and independent-inspector tests, including both numeric/Boolean arc directions, full-circle flags, rejection of ambiguous flags, strict independent-writer validation, mm/inch tolerance-bounded native linearization delegation, excessive mismatch and incomplete-linearization rejection, configuration-version separation, structured failure context, bounded event history, first-error preservation and logging failure isolation.
+- Node.js 24.13.1: 56 writer, synthetic Fusion callback and independent-inspector tests, including both numeric/Boolean arc directions, full-circle flags, rejection of ambiguous flags, strict independent-writer validation, mm/inch tolerance-bounded native linearization delegation, excessive mismatch and incomplete-linearization rejection, configuration-version separation, structured failure context, bounded event history, first-error preservation and logging failure isolation.
 - Exact value sharing preserves repeated motion and separate operations with different feed, coolant and work-offset states. Tests retain nearby but unequal points, verify fresh caches per serialization, and reconcile export statistics with decoded output.
+- Shared-curve tests preserve repeated arcs with different cutting states, distinguish opposite senses and full-circle trims, share identical rapid/cutting geometry without merging actions, and retain radii differing by 1e-12. Native sample tests count ordered arc uses independently of shared curve definitions.
+- Comparison tests ignore metadata, renumbered references and duplicate point definitions, but detect exact changes to feed, coordinates, offsets, spindle direction and coolant. Both inputs are validated; CLI tests distinguish matching, differing, invalid and malformed-command outcomes.
 - Independent inspector tests cover mm/inch units, CSS/RPM, Unicode names, dwell, feeds and state changes, both arc senses, full circles and interior arc extrema. Mutation tests reject broken references, truncation, duplicate sequence positions, missing cutting feeds, invalid units, off-plane points, discontinuities and corrupt arcs. CLI tests check reporting and refusal to overwrite files.
 - Deterministic generation of `posts/next-nc.cps` from the two source files.
 - Independent reader and inspector check Part 21 syntax for the emitted subset, entity references, curve endpoints, circle sense, explicit units, path order, within-operation continuity, feed/CSS values, and profile records. They are also applied to native facing/profile outputs; successful export statistics are reconciled with the resulting graph.
@@ -16,13 +18,13 @@ Version 0.1.4, 2026-09-28 UTC.
 - Native posting also reproduces the numeric arc-direction failure with Autodesk's uncompensated profile sample, then exports the complete corrected sample. The native sample supplies numeric `0` CCW arcs; clockwise/full-circle coverage is synthetic. Two arcs require the native rounding fallback; all other sampled arcs remain analytic. The independent reader checks the analytic arc count and sense.
 - Windows PowerShell 5.1 collector tests: dedicated-log filtering, raw-byte preservation and SHA-256, compatibility diagnosis, structured report extraction, deduplication, latest-error retention after success, timestamp ordering, incomplete-to-complete logs, locked-file retry, and automatic collection by a hidden watcher.
 
-A privately supplied 0.1.3 export passes the profile checks. Its matching engine log reports successful posting. Decoding and replaying it with the original 0.1.3 writer reproduces the entire original text after CRLF normalization; serializing with 0.1.4 gives an exactly equal decoded execution model with fewer records. The original export and comparison artifacts remain local and are not published as fixtures.
+Privately supplied 0.1.3 and 0.1.4 exports pass the profile checks, and their matching engine logs report successful posting. The actual 0.1.4 Fusion export exactly matches the previously predicted serialization apart from the timestamp. Replaying the new export through the saved 0.1.4 writer reproduces its complete text after CRLF normalization; serializing with 0.1.5 gives an exactly equal decoded model with fewer curve definitions. All three decoded models have the same program fingerprint. Private exports and comparison artifacts remain local and are not published as fixtures.
 
 The synthetic callback tests exercise `onOpen`, section metadata, linear/rapid/arc motion, dwell, speed changes, section completion and final output. Failure tests cover unsupported machining and invalid numeric inputs. These tests have no machine connection and use invented tooling and dimensions.
 
 ## Not yet verified
 
-- Reposting the user's actual Fusion job with 0.1.4 through the GUI/CAM exporter. A supplied successful 0.1.3 export has been inspected and reserialized; this does not replace a fresh Fusion repost. Native 0.1.4 posting uses official samples because the user's CAM input is not available for replay.
+- Reposting the user's actual Fusion job with 0.1.5 through the GUI/CAM exporter. A supplied successful 0.1.4 export has been inspected and reserialized; this does not replace a fresh Fusion repost. Native 0.1.5 posting uses official samples because the user's CAM input is not available for replay.
 - Full EXPRESS types, inverse constraints, global rules or ISO AP238 conformance. The test reader is a structural subset reader, not an EXPRESS validator.
 - Acceptance by an independent STEP-NC implementation.
 - Geometry comparison against a real Fusion simulation, large-job performance or machine execution.

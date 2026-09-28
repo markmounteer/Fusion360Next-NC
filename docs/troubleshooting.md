@@ -2,6 +2,8 @@
 
 ## Review a completed export
 
+Version 0.1.5 also logs `curveDefinitions` to distinguish unique geometry from executed paths. A smaller curve count does not mean moves were removed: repeated paths can share a definition with their own feeds, spindle settings and sequence position. Run `npm run inspect -- new.stpnc --compare previous.stpnc` to check exact decoded program equality. Differences identify the first field and its old/new values; exit code 3 means the files are valid but differ. Timestamps, writer version and record numbering/sharing do not affect this comparison. See [comparison scope](format.md#comparing-exports).
+
 Version 0.1.4 adds `summary` counts to the successful `NEXTNC OUTPUT WRITTEN` log entry: entities, reused value records, sections, paths, analytic arcs, straight rapid/cutting segments and dwells. These appear in the full engine log archived by the existing Windows collector; no collector reinstall is required. Fewer point records can be expected because identical values share references.
 
 For an independent local check, use `npm run inspect -- path/to/program.stpnc path/to/new-report.json` from the repository with Node.js 20 or later. It checks the supported execution profile and reports operation/tool/offset information, feeds, initial spindle settings and geometry bounds. It stops at the first detected problem and does not modify the export. See [scope and limits](format.md#local-inspection). A completed export or passing inspection is not proof that a controller can execute the file.

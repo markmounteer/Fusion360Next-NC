@@ -57,6 +57,7 @@ async function main() {
     assert.ok(inspect(good.output).report.paths > 0);
     const summary = JSON.parse(good.log.match(/NEXTNC OUTPUT WRITTEN (\{[^\r\n]+\})/)[1]);
     assert.equal(summary.summary.entities, parse(good.output).records.size);
+    assert.deepEqual(summary.summary.curveDefinitions, inspect(good.output).report.curveDefinitions);
     assert.ok(summary.summary.reusedValues > 0);
     const oldArc = post("bad-arc-flag", source + '\nnextBoolean = function (value) { return value; };\n', "profile no compensation", 500);
     assert.match(oldArc.log, /arc direction must be explicit/);
@@ -68,13 +69,13 @@ async function main() {
     assert.match(profile.log, /Post processing completed successfully/);
     const profileDoc = parse(profile.output);
     const inspected = inspect(profile.output);
-    assert.equal(inspected.report.arcs, profileDoc.all("CIRCLE").length);
+    assert.equal(inspected.report.curveDefinitions.arcs, profileDoc.all("TRIMMED_CURVE").length);
     assert.ok(profileDoc.all("CIRCLE").length > 0);
     assert.ok(profileDoc.all("TRIMMED_CURVE").some(e => e.args[4].symbol === ".T."));
     assert.ok(profileDoc.all("TRIMMED_CURVE").every(e => e.args[4].symbol === ".T."));
     const arcCount = (profile.log.match(/TEST ARC FLAG number 0/g) || []).length;
     const linearizedCount = (profile.log.match(/NEXTNC ARC LINEARIZED/g) || []).length;
-    assert.equal(profileDoc.all("CIRCLE").length, arcCount - linearizedCount);
+    assert.equal(inspected.report.arcs, arcCount - linearizedCount);
     const rejected = post("compensation", source, "profile with compensation", 500);
     assert.match(rejected.log, /\[COMPENSATION\]/);
     const report = JSON.parse(rejected.log.match(/NEXTNC DIAGNOSTIC BEGIN\r?\n([\s\S]*?)\r?\nNEXTNC DIAGNOSTIC END/)[1]);

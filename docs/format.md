@@ -69,9 +69,13 @@ The program has no stock B-rep, part B-rep, fixtures, geometric tool assembly, f
 
 Within one document, identical serialized immutable values reuse an entity reference: points, directions, descriptive/measure items, representations, resource types and derived-unit elements. The cache key includes the complete serialized record, including referenced units and representation contexts. No coordinate rounding or geometric tolerance is used to merge values. Each serialization starts with a fresh cache.
 
-Operations, workingsteps, toolpaths, curves, properties and relationships retain separate identities. Equal coordinates do not merge different moves, remove repeated operations or override differing feed/spindle/coolant state. Consumers must follow the sequence relationships and resolve references; counting point definitions does not count motion vertices.
+Operations, workingsteps, toolpaths, properties and relationships retain separate identities. Equal coordinates do not merge different moves, remove repeated operations or override differing feed/spindle/coolant state. Consumers must follow the sequence relationships and resolve references; counting point definitions does not count motion vertices.
+
+Starting in 0.1.5, exact `POLYLINE`, `AXIS2_PLACEMENT_3D`, `CIRCLE` and `TRIMMED_CURVE` records also share definitions. A shared curve describes geometry only; each machining toolpath retains its own ordered execution and technology/functions relationships. Arc trim endpoints, circle frame/radius, sense and full-circle parameterization all remain part of the cache key. No near-equality or reversed-path matching is used. Two moves may therefore reference one curve while using different feeds, spindle settings or coolant; rapid and cutting paths also remain separate even when their polylines match.
 
 `Program.lastExport`, available after `toSTEP()`, reports entity count, reused value records, sections, paths, arcs, straight rapid/cutting segments and dwells. Straight segment counts exclude arcs; an N-vertex polyline contains N−1 straight segments. The Fusion adapter includes these counts in the `NEXTNC OUTPUT WRITTEN` log entry, alongside native arc-linearization counts.
+
+The 0.1.5 `curveDefinitions` counts identify unique serialized polylines and trimmed arc curves. They are not motion counts: the same curve can be used more than once. `arcs` still counts every executed arc path, including repeats.
 
 ## Local inspection
 
@@ -79,4 +83,10 @@ Operations, workingsteps, toolpaths, curves, properties and relationships retain
 
 The JSON report includes full-precision values, per-operation feed and initial spindle settings, counts and overall coordinate bounds, including intermediate arc extrema. Bounds combine the numeric coordinates of all sections; different work offsets are not transformed into a common machine frame. They are not machine-travel or clearance checks. Section entry transitions remain the consumer's responsibility.
 
-The command is read-only and never uploads data. The optional report must be a new file. It returns exit code 0 when the implemented checks pass, 1 on a validation/file error, or 2 for incorrect arguments. It intentionally supports the emitted Next-NC subset rather than arbitrary AP238 files. Passing it does not establish full EXPRESS conformance, third-party interoperability, fidelity to an unavailable Fusion simulation or safe machining.
+The command is read-only and never uploads data. The optional report must be a new file. It returns exit code 0 when the implemented checks pass (and a requested comparison matches), 1 on a validation/file error, 2 for incorrect arguments, or 3 for two valid but different decoded programs. It intentionally supports the emitted Next-NC subset rather than arbitrary AP238 files. Passing it does not establish full EXPRESS conformance, third-party interoperability, fidelity to an unavailable Fusion simulation or safe machining.
+
+## Comparing exports
+
+Append `--compare previous.stpnc` to compare the input with a previous export. Both files undergo inspection. The returned `sameProgram` value comes from an exact recursive comparison of the ordered decoded models. `firstDifference` identifies the first differing field (zero-based section/path/coordinate indices), with `before` from the previous file and `after` from the current input. It is not an exhaustive list of differences.
+
+`programFingerprint` uses SHA-256 over UTF-8 JSON containing the schema identifier `next-nc/decoded-program/1` and the deterministically ordered decoded model. It covers program/operation names, units, logical tools and descriptions, offsets, section starts/initial states, ordered geometry, arc radius/sense/full-circle state, feeds, spindle states, coolant and dwells. It excludes timestamps, writer release, entity IDs and reference-sharing layout. No coordinate rounding or fuzzy comparison is applied. Fingerprints from different fingerprint schemas must not be compared. Neither this fingerprint nor model equality certifies arbitrary AP238 semantics outside the decoded subset.

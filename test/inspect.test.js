@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const {spawnSync} = require("node:child_process");
 const {Program, stepString} = require("../src/next-nc");
-const {inspect} = require("../lib/inspect");
+const {inspect, compare} = require("../lib/inspect");
 const {parse} = require("../lib/part21");
 const feed = {mode: "perRevolution", value: 0.1};
 function sample(units = "mm") {
@@ -60,7 +60,7 @@ test("interning reuses exact values while keeping repeated motion, sections and 
   p.addSection({name: "Separate", tool: s.tool, workOffset: 2, start: [2, 0, 0], spindle: s.initialSpindle, coolant: "flood"}).linear([3, 0, 0], feed);
   const text = p.toSTEP(), result = inspect(text), doc = parse(text);
   assert.equal(doc.all("CARTESIAN_POINT").length, 3);
-  assert.equal(doc.all("POLYLINE").length, 6);
+  assert.equal(doc.all("POLYLINE").length, 3);
   assert.equal(doc.all("MACHINING_WORKINGSTEP").length, 2);
   assert.equal(doc.all("MACHINING_TOOLPATH").length, 6);
   assert.equal(doc.all("MACHINING_TOOLPATH_SPEED_PROFILE_REPRESENTATION").length, 1);
@@ -85,6 +85,69 @@ test("inspection rejects missing references, broken sequences, feeds, units and 
   const doc = parse(text), poly = doc.all("POLYLINE")[1];
   assert.throws(() => inspect(change(text, "POLYLINE", line => line.replace("#" + poly.args[1][0].ref, "#" + poly.args[1][1].ref), 1)), /discontinuity/);
 });
+test("shared curves preserve repeated arcs, opposite senses, full circles and cutting state", () => {
+  const {p, s} = sample();
+  for (const [i, clockwise] of [false, false, true].entries()) {
+    s.setSpindle({mode: "rpm", speed: 600 + i * 100, clockwise: i !== 1});
+    s.setCoolant(i === 1 ? "flood" : "off");
+    s.arc([0, 0, -2], [0, 0, 0], clockwise, {mode: "perRevolution", value: 0.1 + i * 0.01}, false);
+    s.rapid([2, 0, 0]);
+  }
+  s.arc([2, 0, 0], [0, 0, 0], false, feed, true);
+  s.arc([2, 0, 0], [0, 0, 0], true, feed, true);
+  const text = p.toSTEP(), doc = parse(text), result = inspect(text);
+  assert.equal(doc.all("CIRCLE").length, 1);
+  assert.equal(doc.all("AXIS2_PLACEMENT_3D").length, 1);
+  assert.equal(doc.all("TRIMMED_CURVE").length, 4);
+  assert.equal(result.report.arcs, 5); assert.equal(result.report.paths, 8);
+  assert.deepEqual(p.lastExport.curveDefinitions, result.report.curveDefinitions);
+  const arcs = result.model.sections[0].paths.filter(p => p.kind === "arc");
+  assert.deepEqual(arcs.map(p => p.clockwise), [false, false, true, false, true]);
+  assert.deepEqual(arcs.map(p => p.fullCircle), [false, false, false, true, true]);
+  assert.deepEqual(arcs.slice(0, 3).map(p => p.spindle.speed), [600, 700, 800]);
+  assert.equal(arcs[1].coolant, "flood"); assert.equal(arcs[1].feed.value, 0.11);
+});
+test("identical rapid and cutting curves remain separate moves and unequal arcs stay distinct", () => {
+  const {p, s} = sample();
+  s.rapid([3, 0, 0]); s.rapid([2, 0, 0]); // one ordered polyline, with both vertices retained
+  s.linear([3, 0, 0], feed); s.linear([2, 0, 0], feed);
+  let result = inspect(p.toSTEP());
+  assert.equal(result.report.curveDefinitions.polylines, 1);
+  assert.deepEqual(result.model.sections[0].paths.map(p => p.kind), ["rapid", "linear"]);
+  assert.equal(result.model.sections[0].paths[0].feed, null);
+  assert.deepEqual(result.model.sections[0].paths[1].feed, {value: 0.1, mode: "perRevolution"});
+  s.arc([0, 0, -2], [0, 0, 0], false, feed, false); s.rapid([2 + 1e-12, 0, 0]);
+  s.arc([0, 0, -(2 + 1e-12)], [0, 0, 0], false, feed, false);
+  const doc = parse(p.toSTEP()); assert.equal(doc.all("CIRCLE").length, 2);
+  assert.notEqual(doc.all("CIRCLE")[0].args[2], doc.all("CIRCLE")[1].args[2]);
+});
+test("comparison ignores export metadata, entity IDs and sharing but detects exact program changes", () => {
+  const {p, s} = sample(); s.linear([3, 0, 0], feed); const baseline = p.toSTEP();
+  const metadata = baseline.replace(p.timestamp, "2020-01-01T00:00:00Z").replace(/Fusion360Next-NC 0\.1\.\d+/, "Fusion360Next-NC 99.0.0");
+  assert.equal(compare(baseline, metadata).sameProgram, true);
+  // This fixture has no '#' inside string values, so renumbering references is unambiguous.
+  const renumbered = baseline.replace(/#(\d+)/g, (_, id) => "#" + (Number(id) + 1000));
+  assert.equal(compare(baseline, renumbered).sameProgram, true);
+  // Give the line its own duplicate point definition, with identical coordinates.
+  const doc = parse(baseline), id = doc.all("POLYLINE")[0].args[1][0].ref;
+  const pointLine = baseline.split("\n").find(line => line.startsWith("#" + id + "="));
+  const duplicated = change(baseline, "POLYLINE", line => line.replace("#" + id + ",", "#99999,"))
+    .replace("\nENDSEC;\nEND-ISO", "\n" + pointLine.replace("#" + id + "=", "#99999=") + "\nENDSEC;\nEND-ISO");
+  assert.equal(compare(baseline, duplicated).sameProgram, true);
+  const variants = [
+    [() => { s.paths[0].feed.value += 1e-12; }, "program.sections[0].paths[0].feed.value"],
+    [() => { s.paths[0].points[1][0] += 1e-12; }, "program.sections[0].paths[0].points[1][0]"],
+    [() => { s.workOffset = 2; }, "program.sections[0].workOffset"],
+    [() => { s.paths[0].spindle.clockwise = false; }, "program.sections[0].paths[0].spindle.clockwise"],
+    [() => { s.paths[0].coolant = "mist"; }, "program.sections[0].paths[0].coolant"]
+  ];
+  for (const [mutate, expected] of variants) {
+    const before = p.toSTEP(); mutate(); const diff = compare(before, p.toSTEP());
+    assert.equal(diff.sameProgram, false); assert.equal(diff.firstDifference.path, expected);
+    assert.notEqual(diff.beforeFingerprint.value, diff.afterFingerprint.value);
+  }
+  assert.throws(() => compare(baseline, baseline.slice(0, -5)), /Incomplete/);
+});
 test("inspection rejects arc radius, frame and direction corruption", () => {
   const {p, s} = sample(); s.arc([0, 0, -2], [0, 0, 0], false, feed, false); const text = p.toSTEP();
   assert.throws(() => inspect(change(text, "CIRCLE", line => line.replace(/,2\.\);$/, ",3.);"))), /radius mismatch/);
@@ -99,6 +162,14 @@ test("CLI writes a new local report, rejects invalid data and never overwrites a
     const cli = path.resolve(__dirname, "../scripts/inspect.js");
     let result = spawnSync(process.execPath, [cli, input, output], {encoding: "utf8"});
     assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(fs.readFileSync(output)).sections, 1);
+    result = spawnSync(process.execPath, [cli, input, "--compare", input], {encoding: "utf8"});
+    assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).comparison.sameProgram, true);
+    const changed = path.join(directory, "changed.stpnc"); s.workOffset = 3; fs.writeFileSync(changed, p.toSTEP());
+    result = spawnSync(process.execPath, [cli, changed, "--compare", input], {encoding: "utf8"});
+    assert.equal(result.status, 3, result.stderr); assert.equal(JSON.parse(result.stdout).comparison.firstDifference.path, "program.sections[0].workOffset");
+    for (const args of [[], [input, "--compare"], [input, "--unknown"], [input, "--compare", input, "--compare", input]]) {
+      result = spawnSync(process.execPath, [cli, ...args], {encoding: "utf8"}); assert.equal(result.status, 2, result.stderr);
+    }
     result = spawnSync(process.execPath, [cli, input, input], {encoding: "utf8"});
     assert.equal(result.status, 1); assert.equal(fs.readFileSync(input, "utf8"), text);
     fs.writeFileSync(input, "incomplete"); result = spawnSync(process.execPath, [cli, input], {encoding: "utf8"});
