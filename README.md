@@ -17,7 +17,9 @@ Download [posts/next-nc.cps](posts/next-nc.cps). It is a standalone file; Node.j
 
 See Autodesk's [Post Library instructions](https://help.autodesk.com/cloudhelp/ENU/Fusion-CAM/files/MFG-ADD-POST-PROCESSOR-TO-LIBRARY.htm).
 
-**0.2.0 adds XYZ milling while preserving existing turning files and fingerprints.** Milling uses a separate profile, tool length-offset identity, all three principal arc planes and tolerance-controlled helix linearization by Fusion. It requires LinuxCNCNext-NC v0.5.0 or newer. [Milling contract](docs/milling.md).
+**0.3.0 adds Fusion-expanded milling drilling cycles and automated compatibility checks against LinuxCNCNext-NC v0.11.0.** Plain drilling, dwell drilling (`counter-boring`), chip breaking and deep drilling become explicit moves/dwells using Fusion's cycle settings. Existing turning/milling profiles and geometry semantics remain unchanged. No new post properties are added. [Translator integration and validation](docs/translator-integration.md).
+
+Milling uses a separate profile, tool length-offset identity, all three principal arc planes and tolerance-controlled helix linearization by Fusion. Its existing profile requires LinuxCNCNext-NC v0.5.0 or newer; v0.11.0 is the tested consumer baseline. [Milling contract](docs/milling.md).
 
 Prechecking runs before any toolpath is processed. It checks logical tool/WCS identifiers, initial coordinates, RPM, direction and supplied tolerance across selected sections, and continues diagnosing later sections if one section's metadata cannot be read. Successful prechecks log source facts as well. There are still zero post properties; the [translator](https://github.com/markmounteer/LinuxCNCNext-NC) owns optional checking against your existing LinuxCNC tool table. See the [research rationale](docs/research-review.md).
 
@@ -31,6 +33,7 @@ Exact geometry sharing and export comparison from 0.1.5 remain included. Every m
 | Rapid and cutting lines | All vertices preserved; adjacent moves with identical process state share a polyline |
 | Circular arcs | Lathe XZ; mill XY/XZ/YZ. Analytic circles and bounded trims, both directions, full circles |
 | Milling helices | Fusion linearizes with the tighter operation/post tolerance; all returned vertices retained |
+| Milling drilling | Fusion expands drilling, counter-boring, chip-breaking and deep-drilling; ordered moves, feeds and dwell retained |
 | Units | Millimetres or inches, explicit STEP units |
 | Feed | Length/minute or length/revolution |
 | Spindle | Constant RPM; lathe CSS with Fusion's maximum RPM |
@@ -38,7 +41,7 @@ Exact geometry sharing and export comparison from 0.1.5 remain included. Every m
 
 There are **zero user-defined post properties**. Fusion supplies machining decisions. The controller consumer owns machine limits, tool changes, offset application, entry/retract policy, parking, overrides and motion planning.
 
-The post rejects canned cycles, threading/tapping, controller cutter compensation, dual tool compensation, optional sections, secondary spindles, rotated setups, multi-axis motion, Manual NC, pass-through commands and explicit machine commands. An error prevents the writer from emitting a complete program. Unsupported cycles are not silently converted to ordinary feed moves.
+The post rejects turning cycles, unsupported milling cycles, threading/tapping, controller cutter compensation, dual tool compensation, optional sections, secondary spindles, rotated setups, multi-axis motion, Manual NC, pass-through commands and explicit machine commands. Only the four documented milling cycles are expanded by Fusion. No canned-cycle entities or LinuxCNC G81/G83 instructions are emitted. An error prevents the writer from emitting a complete program; exports over the consumer's 32 MiB limit fail before output.
 
 The post buffers the program until it is accepted, so memory use grows with toolpath size. Geometry is a toolpath, not a reconstruction of Fusion's design, stock, fixtures or feature-based machining intent.
 

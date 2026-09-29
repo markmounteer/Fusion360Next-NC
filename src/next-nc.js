@@ -3,7 +3,7 @@
  */
 var NextNC = (function () {
   "use strict";
-  var VERSION = "0.2.0";
+  var VERSION = "0.3.0";
   var PROFILE = "next-nc/turning-toolpath/0.1";
   var MILL_PROFILE = "next-nc/milling-toolpath/0.1";
   var planes = {XY: {normal: [0, 0, 1], axes: [0, 1], fixed: 2}, XZ: {normal: [0, 1, 0], axes: [0, 2], fixed: 1}, YZ: {normal: [1, 0, 0], axes: [1, 2], fixed: 0}};

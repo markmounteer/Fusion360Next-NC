@@ -100,7 +100,7 @@ When Fusion does not provide the parameter, precheck leaves the setting undeterm
 
 ## Other early checks
 
-Precheck also reports the existing unsupported section conditions: non-turning/multi-axis sections, optional sections, secondary spindles, rotated/mirrored work planes, cycles, unsupported feed/spindle modes and coolant, plus invalid CSS speed or maximum RPM. Multiple conditions can appear under the same operation.
+Precheck also reports unsupported section types/multi-axis motion, optional sections, secondary spindles, rotated/mirrored work planes, unsupported cycles, feed/spindle modes and coolant, plus invalid CSS speed or maximum RPM. Multiple conditions can appear under the same operation. Fixed XYZ milling is supported. Four milling drilling cycles can be expanded in v0.3.0; missing cycle metadata remains subject to the runtime allowlist. Failed expansion reports the cycle type, available parameters, operation and completed point count. See [cycle support and limits](translator-integration.md).
 
 This is a metadata check, not a complete simulation or inspection of every motion record. Numeric geometry, arc consistency, changing process state, Manual NC and other commands still have runtime validation. There is no guarantee that a successful precheck means the entire export will succeed or that the result is machine-ready.
 

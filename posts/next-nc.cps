@@ -4,7 +4,7 @@
  */
 var NextNC = (function () {
   "use strict";
-  var VERSION = "0.2.0";
+  var VERSION = "0.3.0";
   var PROFILE = "next-nc/turning-toolpath/0.1";
   var MILL_PROFILE = "next-nc/milling-toolpath/0.1";
   var planes = {XY: {normal: [0, 0, 1], axes: [0, 1], fixed: 2}, XZ: {normal: [0, 1, 0], axes: [0, 2], fixed: 1}, YZ: {normal: [1, 0, 0], axes: [1, 2], fixed: 0}};
@@ -362,6 +362,11 @@ var nextEventCount = 0;
 var nextStartedUTC = "";
 var nextSectionDiagnostics = [];
 var nextLinearizedArcs = 0;
+var nextCycle;
+var nextExpandedCyclePoints = 0;
+var nextCycleTypes = [];
+var nextCycleCuttingMoves = 0;
+var nextSupportedCycles = ["drilling", "counter-boring", "chip-breaking", "deep-drilling"];
 
 // Use the engine log: direct file access is restricted by Fusion's security
 // level, and no callback can run when the engine rejects the global script.
@@ -383,7 +388,8 @@ function nextContext() {
     outputPath: nextRead(function () { return getOutputPath(); }),
     program: nextRead(function () { return programName; }), units: unit === MM ? "mm" : "inch",
     startedUTC: nextStartedUTC, sectionCount: nextRead(function () { return getNumberOfSections(); }),
-    linearizedArcCount: nextLinearizedArcs
+    linearizedArcCount: nextLinearizedArcs, expandedCyclePoints: nextExpandedCyclePoints,
+    cycle: nextCycle || null
   };
 }
 function nextSnapshot(section, index, issues) {
@@ -396,6 +402,7 @@ function nextSnapshot(section, index, issues) {
       entry: nextRead(function () { return nextPoint(section.getInitialPosition()); }),
       initialRPM: nextRead(function () { return section.getInitialSpindleSpeed(); }),
       operationTolerance: nextRead(function () { return section.getParameter("operation:tolerance"); }),
+      cycleType: nextRead(function () { return section.hasAnyCycle() ? section.getParameter("operation:cycleType") : "none"; }),
       axisSubstitution: nextRead(function () { return nextSectionFlag(section, "getAxisSubstitution", "axisSubstitution"); }),
       dynamicWorkOffsetDefined: nextRead(function () { return nextSectionFlag(section, "hasDynamicWorkOffset"); }),
       dynamicWorkOffset: nextRead(function () { return section.getDynamicWorkOffset(); }),
@@ -506,7 +513,10 @@ function nextSectionIssues(section) {
       nextCompensationFix());
   }
   if (section.hasAnyCycle()) {
-    issues.push("[CYCLE] This section contains a cycle. Canned cycles and synchronized threading/tapping are unsupported; exclude it or use a post that supports it.");
+    var declaredCycle = section.hasParameter("operation:cycleType") ? section.getParameter("operation:cycleType") : undefined;
+    if (!milling || (declaredCycle !== undefined && nextSupportedCycles.indexOf(declaredCycle) < 0)) {
+      issues.push("[CYCLE] Canned cycles for turning and synchronized threading/tapping are unsupported. Only fixed XYZ milling drilling, counter-boring, chip-breaking and deep-drilling can be expanded by Fusion into explicit moves. Detected: " + nextDiagnosticText(declaredCycle || "cycle type unavailable") + ".");
+    }
   }
   if (section.feedMode !== FEED_PER_MINUTE && section.feedMode !== FEED_PER_REVOLUTION) {
     issues.push("[FEED] Unsupported feed mode. Use feed per minute or feed per revolution.");
@@ -647,7 +657,14 @@ function onSection() {
   });
 }
 function onRapid(x, y, z) { nextGuard(function () { nextNeedSection(); nextSection.rapid([x, y, z]); }); }
-function onLinear(x, y, z, feed) { nextGuard(function () { nextNeedSection(); nextSection.linear([x, y, z], nextFeed(feed)); }); }
+function onLinear(x, y, z, feed) {
+  nextGuard(function () {
+    nextNeedSection();
+    var moved = nextSection.position[0] !== x || nextSection.position[1] !== y || nextSection.position[2] !== z;
+    nextSection.linear([x, y, z], nextFeed(feed));
+    if (nextCycle && moved) { ++nextCycleCuttingMoves; }
+  });
+}
 function onCircular(clockwise, cx, cy, cz, x, y, z, feed) {
   nextGuard(function () {
     nextNeedSection();
@@ -706,8 +723,41 @@ function onRadiusCompensation() {
   nextReject("[COMPENSATION] The toolpath requests " + side + " controller-side tool-nose compensation. " + detail + nextCompensationFix());
 }
 function onToolCompensation() { nextReject("Dual tool compensation changes are unsupported."); }
-function onCycle() { nextReject("Canned cycles and spindle-synchronized threading are not implemented."); }
-function onCyclePoint() { nextReject("Cycle motion is unsupported."); }
+function onCycle() {
+  nextNeedSection();
+  if (nextCycle) { throw new Error("Next-NC: [CYCLE] Nested cycle before the previous cycle ended."); }
+  var type = typeof cycleType === "string" ? cycleType : "unavailable";
+  nextCycle = {type: type, points: 0};
+  if (nextProgram.machine !== "mill" || nextSupportedCycles.indexOf(type) < 0) {
+    nextReject("[CYCLE] Canned cycles are not emitted. Fusion expansion supports only fixed XYZ milling drilling, counter-boring, chip-breaking and deep-drilling; received " + nextDiagnosticText(type) + ". Threading, tapping, probing and spindle-stop/orientation cycles require a different supported process.");
+  }
+  var fields = ["clearance", "retract", "stock", "depth", "feedrate", "dwell", "incrementalDepth", "incrementalDepthReduction", "minimumIncrementalDepth", "accumulatedDepth", "chipBreakDistance"];
+  nextCycle.parameters = {};
+  for (var i = 0; i < fields.length; ++i) {
+    if (cycle[fields[i]] !== undefined) { nextCycle.parameters[fields[i]] = cycle[fields[i]]; }
+  }
+  if (cycle.stopSpindle !== undefined && nextBoolean(cycle.stopSpindle, "cycle stopSpindle")) {
+    throw new Error("Next-NC: [CYCLE] Spindle-stop drilling is not supported by this profile.");
+  }
+  if (typeof expandCyclePoint !== "function") { throw new Error("Next-NC: [CYCLE] This Fusion engine does not provide cycle expansion."); }
+  if (nextCycleTypes.indexOf(type) < 0) { nextCycleTypes.push(type); }
+}
+function onCyclePoint(x, y, z) {
+  nextNeedSection();
+  if (!nextCycle || nextCycle.type !== cycleType) { throw new Error("Next-NC: [CYCLE] Missing or changed cycle identity during expansion."); }
+  // Fusion owns depths, pecks, clearance and feed. Its expansion calls our normal
+  // validated motion/dwell callbacks. Never substitute a hand-written cycle.
+  var before = nextCycleCuttingMoves;
+  expandCyclePoint(x, y, z);
+  if (nextCycleCuttingMoves === before) { throw new Error("Next-NC: [CYCLE] Fusion expansion produced no cutting move for this cycle point. Review the cycle depth and regenerate the operation."); }
+  ++nextCycle.points; ++nextExpandedCyclePoints;
+}
+function onCycleEnd() {
+  if (!nextCycle) { throw new Error("Next-NC: [CYCLE] Cycle end without an accepted cycle."); }
+  if (!nextCycle.points) { throw new Error("Next-NC: [CYCLE] Cycle contains no points."); }
+  nextLog("NEXTNC CYCLE EXPANDED " + JSON.stringify({operation: nextOperationLabel, cycle: nextCycle, units: unit === MM ? "mm" : "inch"}));
+  nextCycle = undefined;
+}
 function onCyclePath() { nextReject("Cycle paths are unsupported."); }
 function onLinear5D() { nextReject("Multi-axis motion is unsupported."); }
 function onRapid5D() { nextReject("Multi-axis motion is unsupported."); }
@@ -720,16 +770,25 @@ function onSpecialCycle() { nextReject("Special cycles are unsupported."); }
 function onPower() { nextReject("Power-control instructions are unsupported."); }
 function onLiveAlignment() { nextReject("Live part alignment is unsupported."); }
 function onCommand(command) {
+  if (nextCycle) { nextReject("[CYCLE] Fusion expansion requested unsupported command " + getCommandStringId(command) + ". Only resolved motion and dwell are supported for drilling cycles."); }
   if (command !== COMMAND_END) { nextReject("Unsupported command: " + getCommandStringId(command) + ". Set spindle and coolant in the Fusion operation."); }
 }
-function onSectionEnd() { nextSection = undefined; nextOperationLabel = ""; }
+function onSectionEnd() {
+  if (nextCycle) { throw new Error("Next-NC: [CYCLE] Section ended before cycle expansion completed."); }
+  nextSection = undefined; nextOperationLabel = "";
+}
 function onClose() {
   nextGuard(function () {
     // Nothing is emitted before the entire program has been accepted.
-    var output = nextProgram.toSTEP().split("\n");
+    if (nextCycle) { throw new Error("Next-NC: [CYCLE] Program ended before cycle expansion completed."); }
+    var text = nextProgram.toSTEP();
+    // The writer emits ASCII, so character count equals byte count here.
+    if (text.length > 32 * 1024 * 1024) { throw new Error("Next-NC: Export exceeds the translator's 32 MiB input limit. Split the selected operations into separate programs and post again."); }
+    var output = text.split("\n");
     for (var i = 0; i < output.length - 1; ++i) { writeln(output[i]); }
     nextLog("NEXTNC OUTPUT WRITTEN " + JSON.stringify({release: NextNC.version, callbacks: nextEventCount,
       sections: getNumberOfSections(), lines: output.length - 1, linearizedArcs: nextLinearizedArcs,
+      expandedCyclePoints: nextExpandedCyclePoints, expandedCycleTypes: nextCycleTypes,
       summary: nextProgram.lastExport}));
   });
 }
@@ -747,6 +806,7 @@ onRadiusCompensation = nextCallback("onRadiusCompensation", onRadiusCompensation
 onToolCompensation = nextCallback("onToolCompensation", onToolCompensation);
 onCycle = nextCallback("onCycle", onCycle);
 onCyclePoint = nextCallback("onCyclePoint", onCyclePoint);
+onCycleEnd = nextCallback("onCycleEnd", onCycleEnd);
 onCyclePath = nextCallback("onCyclePath", onCyclePath);
 onLinear5D = nextCallback("onLinear5D", onLinear5D);
 onRapid5D = nextCallback("onRapid5D", onRapid5D);

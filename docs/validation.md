@@ -1,3 +1,15 @@
+# v0.3.0 validation update
+
+See [translator integration and validation](translator-integration.md) for the
+current checks: 78 local Node groups, four lathe/mill and mm/inch integration
+scenarios, and ten native Autodesk outputs through LinuxCNCNext-NC v0.11.0.
+Four native drilling samples preserve every expanded motion callback. Tapping,
+unsupported commands and failed expansion remain explicit errors. CI now checks
+the pinned translator on Windows/Linux and Node 20/22/24. No physical machine or
+user Fusion GUI job was run.
+
+The sections below are historical release records.
+
 # v0.2.0 validation update
 
 - 70 Node test groups cover the previous turning behavior plus XYZ geometry, all principal planes, arc bounds/senses/full circles, profile separation, tool-length offsets, mixed-machine/CSS rejection, milling callback flow, helix linearization and bounded endpoint roundoff.

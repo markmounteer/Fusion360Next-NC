@@ -20,7 +20,12 @@ const cases = [
   ["profile with compensation", "22610053be4759494b659675a297b948f798cfa869347fd960ab509128dd031a"],
   ["mill-face", "c6a5792912b1806ddf330e8060cefb6e3a97a5d8a0e1479bf30483b72b8954b7", "Milling/2D/face"],
   ["mill-bore", "ff2eab89951df4a302612d75dad1fdca38bee45fc84e81d9efbd699a1fa92f01", "Milling/2D/bore"],
-  ["mill-toolchange", "8406eb9225d8b51b5ce7c6bc0ec79ab496dcce8db826f2815f71f1eb80d122f7", "Milling/2D/toolchange"]
+  ["mill-toolchange", "8406eb9225d8b51b5ce7c6bc0ec79ab496dcce8db826f2815f71f1eb80d122f7", "Milling/2D/toolchange"],
+  ["mill-Rapid out", "d9af1261a0a54a7a6192ef50ca08d82a8f5c55e85759459e8df62d06c2f0ea40", "Milling/Drilling/Rapid out"],
+  ["mill-dwell and rapid out", "066090e05c0949ca19533aefd198cd3e07e0af098a7da190cd0abf388214773d", "Milling/Drilling/dwell and rapid out"],
+  ["mill-chip breaking", "30c76060259e51ad4ad4c885bb7d28cce03897b509abd40e68dca00fe970ec40", "Milling/Drilling/chip breaking"],
+  ["mill-deep drilling", "14379b236cafa167cd0d1a019429c1a92d3820280a0b1bda90b071fa4cee7d56", "Milling/Drilling/deep drilling"],
+  ["mill-tapping", "01b3fb196823dfc9155d84d9faaf7fb85e00ce22a89204cce60ead40997416c2", "Milling/Drilling/tapping"]
 ];
 async function main() {
   fs.mkdirSync(cache, {recursive: true});
@@ -39,6 +44,9 @@ async function main() {
   }
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "next-nc-posting-"));
   const source = fs.readFileSync(path.join(root, "posts/next-nc.cps"), "utf8");
+  const bridge = process.env.LINUXCNC_NEXTNC ? require("../test/support/translator") : null;
+  const consumer = bridge ? bridge.consumer() : null;
+  if (!bridge) console.log("NOT CHECKED: translator integration; set LINUXCNC_NEXTNC to the pinned checkout to enable it.");
   function post(name, cpsSource, fixture, expected) {
     const cps = path.join(temporary, name + ".cps"), out = path.join(temporary, name + ".stpnc");
     const logPath = path.join(temporary, name + ".log");
@@ -48,9 +56,47 @@ async function main() {
     if (result.error) throw result.error;
     const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
     assert.equal(result.status, expected, log + result.stdout + result.stderr);
-    return {log, output: fs.existsSync(out) ? fs.readFileSync(out, "utf8") : ""};
+    const output = fs.existsSync(out) ? fs.readFileSync(out, "utf8") : "";
+    if (expected === 0 && bridge) {
+      const checked = bridge.checkTranslation(output, consumer);
+      console.log(`PASS: ${name}: translator completeness, policy and serialization audits (${checked.out.report.gcodeLines} lines).`);
+    }
+    return {log, output};
   }
   try {
+    const trace = `
+var traceRapid = onRapid, traceLinear = onLinear, traceDwell = onDwell;
+onRapid = function (x,y,z) { log("TEST EXPANDED " + JSON.stringify({kind:"rapid",end:[x,y,z]})); traceRapid(x,y,z); };
+onLinear = function (x,y,z,f) { log("TEST EXPANDED " + JSON.stringify({kind:"linear",end:[x,y,z],feed:f})); traceLinear(x,y,z,f); };
+onDwell = function (t) { log("TEST EXPANDED " + JSON.stringify({kind:"dwell",seconds:t})); traceDwell(t); };
+`;
+    for (const [fixture, type] of [["mill-Rapid out", "drilling"], ["mill-dwell and rapid out", "counter-boring"], ["mill-chip breaking", "chip-breaking"], ["mill-deep drilling", "deep-drilling"]]) {
+      const result = post(fixture, source + trace, fixture, 0), decoded = inspect(result.output);
+      const summaries = [...result.log.matchAll(/NEXTNC CYCLE EXPANDED (\{[^\r\n]+\})/g)].map(m => JSON.parse(m[1]));
+      assert.ok(summaries.length); assert.ok(summaries.every(s => s.cycle.type === type && s.cycle.points > 0));
+      assert.equal(decoded.model.sections.length, 1);
+      let position = decoded.model.sections[0].start;
+      const callbacks = [...result.log.matchAll(/TEST EXPANDED (\{[^\r\n]+\})/g)].map(m => JSON.parse(m[1])).filter(event => {
+        if (event.kind === "dwell") return true;
+        const changed = event.end.some((n, i) => n !== position[i]); position = event.end; return changed;
+      });
+      const paths = decoded.model.sections[0].paths;
+      const actual = paths.flatMap(p => p.kind === "dwell" ? [{kind: "dwell", seconds: p.seconds}] : p.points.slice(1).map(end => ({kind: p.kind, end, ...(p.feed ? {feed: p.feed.value} : {})})));
+      assert.deepEqual(actual, callbacks, "Every native expanded move, feed and dwell must survive in order");
+      const cuts = actual.filter(e => e.kind === "linear").length;
+      assert.ok(cuts >= 2);
+      if (type === "counter-boring" && summaries.some(s => s.cycle.parameters.dwell > 0)) assert.ok(actual.some(e => e.kind === "dwell"));
+      if (type === "chip-breaking" || type === "deep-drilling") assert.ok(cuts > summaries.reduce((n,s) => n + s.cycle.points, 0));
+      console.log(`PASS: actual Autodesk ${type}: ${callbacks.length} ordered moves/dwells exactly preserved.`);
+    }
+    // The published counter-boring sample requests zero dwell. Exercise a
+    // positive dwell separately with an explicit test-only parameter override.
+    const dwellDriver = '\nvar nativeCycle = onCycle; onCycle = function () { cycle.dwell = 0.25; nativeCycle(); };\n';
+    const dwellResult = post("synthetic-positive-dwell", source + dwellDriver, "mill-dwell and rapid out", 0);
+    const dwells = inspect(dwellResult.output).model.sections.flatMap(s => s.paths.filter(p => p.kind === "dwell"));
+    assert.equal(dwells.length, 2); assert.ok(dwells.every(p => p.seconds === 0.25));
+    const tapping = post("reject-tapping", source, "mill-tapping", 500);
+    assert.match(tapping.log, /\[CYCLE\]/); assert.doesNotMatch(tapping.output, /END-ISO-10303-21/);
     for (const fixture of ["mill-face", "mill-bore", "mill-toolchange"]) {
       const result = post(fixture, source, fixture, 0), decoded = inspect(result.output);
       assert.equal(decoded.report.machine, "mill");

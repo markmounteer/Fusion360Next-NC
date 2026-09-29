@@ -15,7 +15,7 @@ LinuxCNC normally executes RS274 G-code. It documents an optional `[TASK] INTERP
 5. Integrate preview, error locations, stop/resume, abort, run-from-line/restart, MDI coexistence, tool-table changes and overrides. A parser that emits motions alone is insufficient.
 6. Validate in simulation against a reference Fusion/G-code program before any operator-supervised machine acceptance.
 
-Threading, tapping, canned cycles and multi-axis motion are deliberately rejected by this exporter. Supporting them requires a separately specified and tested extension; treating a synchronized threading move as an ordinary line is incorrect.
+Threading, tapping, turning cycles, unsupported milling cycles and multi-axis motion are rejected by this exporter. Since v0.3.0, four nonsynchronized milling drilling cycles use Fusion's native expansion into explicit moves/dwells; see [the integration contract](translator-integration.md). Synchronized threading must never be treated as an ordinary line.
 
 ## Proposed milestones
 
