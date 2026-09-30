@@ -143,7 +143,7 @@ test("Fusion numeric and Boolean arc directions retain both STEP senses", () => 
     c.onCircular(flag, 8, 0, 0, 8, 0, -2, 0.1);
     assert.equal(c.nextSection.paths.at(-1).clockwise, clockwise);
     c.onClose(); const curve = require("../lib/inspect").inspect(output.join("\n") + "\n").model.sections[0].paths.at(-1);
-    assert.equal(curve.radius,2); assert.equal(curve.clockwise,clockwise);
+    assert.equal(Math.hypot(curve.start[0]-curve.center[0],curve.start[2]-curve.center[2]),2); assert.equal(curve.clockwise,clockwise);
   }
 });
 test("Fusion numeric full-circle flags preserve complete circles", () => {

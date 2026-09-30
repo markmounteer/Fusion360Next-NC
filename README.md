@@ -104,7 +104,7 @@ The inspector is independent of the writer, requires Node.js, and is not embedde
 
 Edit `src/next-nc.js` and `src/fusion-adapter.js`, then run `npm run build`. Commit the generated `posts/next-nc.cps` too. CI checks that the source and post match, runs tests on Node 20/22/24, and checks the reproducible example.
 
-To exercise the writer in Autodesk's installed JavaScript runtime, set `AUTODESK_POST` to your `post.exe` and run `npm run test:autodesk`. Run `npm run test:posting` for actual engine posting against checksum-pinned Autodesk sample turning and milling inputs (downloaded to `.cache`, not redistributed). This verifies the compatibility gate, numeric arc flags, successful facing/profile output, arc rounding fallback, precheck/runtime rejection, milling facing/bore/toolchange, and native helix linearization. `npm run test:collector` checks the Windows log collector. These do not test the Fusion GUI or a machine.
+To exercise the writer in Autodesk's installed JavaScript runtime, set `AUTODESK_POST` to your `post.exe` and run `npm run test:autodesk`. Run `npm run test:posting` for actual engine posting against checksum-pinned Autodesk sample turning and milling inputs (downloaded to `.cache`, not redistributed). This verifies the compatibility gate, numeric arc flags, successful facing/profile output, arc rounding fallback, precheck/runtime rejection, milling facing/bore/toolchange, and preserved analytic helices. Retained circular callbacks are compared with decoded endpoints, centers, sweep, direction, rise and feed. `npm run test:collector` checks the Windows log collector. These do not test the Fusion GUI or a machine.
 
 ## License and provenance
 

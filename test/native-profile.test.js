@@ -42,6 +42,15 @@ test("missing tolerance stays missing and does not become a post default",()=>{
   const p=program({tolerance:{value:null,provenance:"missing"}});
   assert.deepEqual(inspect(p.toSTEP()).model.sections[0].tolerance,{value:null,provenance:"missing"});
 });
+test("revision two hashes source fields independent of JSON property order and derived radius",()=>{
+  const text=program({rise:2}).toSTEP(), original=inspect(text);
+  const reordered=text.replace(/(DESCRIPTIVE_REPRESENTATION_ITEM\('next-nc (?:circular motion|tolerance)',')([^']+)('\))/g, (_,prefix,value,suffix)=>
+    prefix+JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(value)).reverse()))+suffix);
+  assert.notEqual(reordered,text);
+  assert.deepEqual(inspect(reordered).model,original.model);
+  assert.equal(inspect(reordered).report.programFingerprint.value,original.report.programFingerprint.value);
+  assert.equal(Object.hasOwn(original.model.sections[0].paths[0],"radius"),false);
+});
 test("Fusion retains operation tolerance and movement while rejecting unsupported coolant",()=>{
   const {c,output}=engine(); c.currentSection.parameters["operation:tolerance"]=0.004;
   c.onOpen();c.onSection();c.onMovement(c.MOVEMENT_LEAD_IN);c.onLinear(12,0,0,0.1);c.onClose();

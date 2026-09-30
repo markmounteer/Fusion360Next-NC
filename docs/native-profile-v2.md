@@ -51,6 +51,11 @@ dimensioned intent; runtime admission still requires synchronization support.
 Revision-1 decoded fingerprints are unchanged. Revision-2 fingerprints use
 `next-nc/decoded-program/2` and include tolerance, movement, sweep, rise and required
 capabilities. Changing any of them invalidates a plan bound to the old fingerprint.
+Objects are decoded in a fixed field order regardless of JSON property order.
+Native circular models retain the seven source fields; computed radius and other
+floating-point metrics stay outside the fingerprint because math libraries may
+round those derived values differently. Revision-1 declared circle radius is
+still a source field and its fingerprint is unchanged.
 
 Validation commands: `npm test`, `npm run check:build`, and
 `npm run test:posting` with `AUTODESK_POST` pointing to the installed post engine.
