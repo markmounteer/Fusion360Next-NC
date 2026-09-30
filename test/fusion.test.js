@@ -9,7 +9,7 @@ function failureReport(logs) {
   return JSON.parse(report.split("NEXTNC DIAGNOSTIC BEGIN\n")[1].split("\nNEXTNC DIAGNOSTIC END")[0]);
 }
 
-test("XYZ milling uses length offset and planar arcs; helices use Fusion linearization", () => {
+test("XYZ milling preserves planar and helical native records without linearization", () => {
   const {c, output, logs} = engine();
   c.currentSection.getType = () => c.TYPE_MILLING;
   c.currentSection.getStrategy = () => "contour2d";
@@ -21,26 +21,27 @@ test("XYZ milling uses length offset and planar arcs; helices use Fusion lineari
   c.onCircular(0, 1, 1, -1, 1, 2, -1, 100);
   c.isHelical = () => true;
   c.canLinearize = () => true;
-  c.linearize = tolerance => { assert.ok(tolerance > 0); c.onLinear(0.5, 1.5, -1.5, 100); c.onLinear(1, 1, -2, 100); };
-  c.onCircular(0, 1, 1, -1, 1, 1, -2, 100); c.onClose();
+  c.linearize = () => { throw new Error("helix must stay analytic"); };
+  c.onCircular(0, 1, 1, -1, 0, 1, -2, 100); c.onClose();
   const {model, report} = require("../lib/inspect").inspect(output.join("\n") + "\n");
   assert.equal(report.machine, "mill"); assert.equal(model.sections[0].tool.offset, 7);
-  assert.equal(model.sections[0].paths.find(p => p.kind === "arc").plane, "XY");
-  assert.deepEqual(model.sections[0].paths.at(-1).points.at(-1), [1, 1, -2]);
-  assert.ok(logs.some(l => l.includes("HELIX LINEARIZED")));
+  assert.equal(model.sections[0].paths.find(p => p.kind === "circular").plane, "XY");
+  assert.deepEqual(model.sections[0].paths.at(-1).end, [0, 1, -2]);
+  assert.equal(model.sections[0].paths.at(-1).axialRise,-1);
+  assert.ok(!logs.some(l => l.includes("HELIX LINEARIZED")));
 });
 
-test("native helix roundoff retains generated vertices and the exact endpoint; incomplete output fails", () => {
-  for (const delta of [2e-15, 0.000001]) {
-    const {c, output} = engine(); c.currentSection.getType = () => c.TYPE_MILLING; c.tool.lengthOffset = 1;
+test("native helix keeps the exact endpoint and rejects a contradictory native sweep", () => {
+  for (const sweep of [2*Math.PI, Math.PI]) {
+    const {c, output} = engine({getCircularSweep:()=>sweep}); c.currentSection.getType = () => c.TYPE_MILLING; c.tool.lengthOffset = 1;
     c.currentSection.feedMode = c.FEED_PER_MINUTE; c.getCircularPlane = () => c.PLANE_XY;
     c.isHelical = () => true; c.canLinearize = () => true;
-    c.linearize = () => c.onLinear(12, -8 - delta, -2, 100);
+    c.linearize = () => { throw new Error("unexpected linearization"); };
     c.onOpen(); c.onSection();
-    if (delta > 1e-10) { assert.throws(() => c.onCircular(0, 10, -8, 2, 12, -8, -2, 100), /endpoint/); assert.equal(output.length, 0); }
-    else { c.onCircular(0, 10, -8, 2, 12, -8, -2, 100); c.onClose();
-      const points = require("../lib/inspect").inspect(output.join("\n") + "\n").model.sections[0].paths[0].points;
-      assert.deepEqual(points.slice(-2), [[12, -8 - delta, -2], [12, -8, -2]]);
+    if (sweep === Math.PI) { assert.throws(() => c.onCircular(0, 10, 0, 2, 12, 0, -2, 100), /endpoint/); assert.equal(output.length, 0); }
+    else { c.onCircular(0, 10, 0, 2, 12, 0, -2, 100); c.onClose();
+      const path = require("../lib/inspect").inspect(output.join("\n") + "\n").model.sections[0].paths[0];
+      assert.deepEqual(path.end, [12,0,-2]); assert.equal(path.sweepRadians,sweep); assert.equal(path.axialRise,-4);
     }
   }
 });
@@ -141,22 +142,20 @@ test("Fusion numeric and Boolean arc directions retain both STEP senses", () => 
     const {c, output} = engine(); c.onOpen(); c.onSection(); c.onRapid(10, 0, 0);
     c.onCircular(flag, 8, 0, 0, 8, 0, -2, 0.1);
     assert.equal(c.nextSection.paths.at(-1).clockwise, clockwise);
-    c.onClose(); const doc = parse(output.join("\n") + "\n");
-    assert.equal(doc.all("CIRCLE")[0].args[2], 2);
-    assert.equal(doc.all("TRIMMED_CURVE")[0].args[4].symbol, clockwise ? ".F." : ".T.");
+    c.onClose(); const curve = require("../lib/inspect").inspect(output.join("\n") + "\n").model.sections[0].paths.at(-1);
+    assert.equal(curve.radius,2); assert.equal(curve.clockwise,clockwise);
   }
 });
 test("Fusion numeric full-circle flags preserve complete circles", () => {
   for (const flag of [0, 1]) {
     const {c, output} = engine({isFullCircle: () => 1}); c.onOpen(); c.onSection(); c.onRapid(10, 0, 0);
     c.onCircular(flag, 8, 0, 0, 10, 0, 0, 0.1); c.onClose();
-    const curve = parse(output.join("\n") + "\n").all("TRIMMED_CURVE")[0];
-    assert.equal(curve.args[3][0].args[0], 2 * Math.PI);
-    assert.equal(curve.args[4].symbol, flag ? ".F." : ".T.");
+    const curve = require("../lib/inspect").inspect(output.join("\n") + "\n").model.sections[0].paths.at(-1);
+    assert.equal(curve.sweepRadians, 2 * Math.PI); assert.equal(curve.clockwise,Boolean(flag));
   }
   const {c, output} = engine({isFullCircle: () => 0}); c.onOpen(); c.onSection(); c.onRapid(10, 0, 0);
   c.onCircular(0, 8, 0, 0, 8, 0, -2, 0.1); c.onClose();
-  assert.equal(parse(output.join("\n") + "\n").all("TRIMMED_CURVE")[0].args[5].symbol, ".CARTESIAN.");
+  assert.ok(require("../lib/inspect").inspect(output.join("\n") + "\n").model.sections[0].paths.at(-1).sweepRadians<2*Math.PI);
 });
 test("invalid Fusion arc flags fail explicitly without a completed program", () => {
   for (const value of [undefined, null, -1, 2, "0", "1", "false", NaN, {}]) {

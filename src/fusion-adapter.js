@@ -19,8 +19,8 @@ minimumChordLength = spatial(0.001, MM);
 minimumCircularRadius = spatial(0.001, MM);
 maximumCircularRadius = spatial(100000, MM);
 minimumCircularSweep = toRad(0.001);
-maximumCircularSweep = 2 * Math.PI;
-allowHelicalMoves = true; // Milling helices are linearized by Fusion at the operation tolerance.
+maximumCircularSweep = 2000 * Math.PI;
+allowHelicalMoves = true; // Revision 2 preserves native analytic helices.
 allowSpiralMoves = false;
 allowedCircularPlanes = (1 << PLANE_ZX) | (1 << PLANE_XY) | (1 << PLANE_YZ);
 
@@ -221,6 +221,9 @@ function nextSectionIssues(section) {
   if ([COOLANT_OFF, COOLANT_FLOOD, COOLANT_MIST, COOLANT_THROUGH_TOOL].indexOf(sectionTool.coolant) < 0) {
     issues.push("[COOLANT] Unsupported coolant selection. Supported modes are Off, Flood, Mist, and Through tool.");
   }
+  if (sectionTool.coolant === COOLANT_THROUGH_TOOL) {
+    issues.push("[COOLANT_CAPABILITY] Through-tool coolant requires a controller-owned coolant-through-tool capability, which the current Next-NC motion target does not implement. Review this operation's Tool > Coolant setting and machine plumbing. Select another mode only if it is correct for this cut; the post will not substitute Flood or Mist.");
+  }
   return issues;
 }
 function nextPrecheck() {
@@ -273,18 +276,6 @@ function nextArcTolerance() {
   }
   return limit;
 }
-function nextFinishHelix(x, y, z, feed, limit) {
-  var end = [x, y, z], position = nextSection.position, differs = false;
-  for (var i = 0; i < 3; ++i) {
-    // Native linearize() may end a few floating-point ulps from the callback
-    // endpoint. Keep its vertices, then retain the exact supplied endpoint too.
-    // This allowance is bounded far below the CAM tolerance, not a snap radius.
-    var roundoff = Math.min(limit * 1e-6, Math.max(1, Math.abs(end[i]), Math.abs(position[i])) * 32 * 2.220446049250313e-16);
-    if (Math.abs(position[i] - end[i]) > roundoff) { throw new Error("Next-NC: Fusion helix linearization did not reach its endpoint. Expected " + JSON.stringify(end) + "; received " + JSON.stringify(position) + "."); }
-    differs = differs || position[i] !== end[i];
-  }
-  if (differs) { nextSection.linear(end, nextFeed(feed)); }
-}
 function nextFeed(value) { return {value: value, mode: nextFeedMode}; }
 function nextSetFeedMode(mode) {
   if (mode === FEED_PER_MINUTE) { nextFeedMode = "perMinute"; }
@@ -304,7 +295,7 @@ function onOpen() {
     nextStartedUTC = new Date().toISOString();
     nextLog("NEXTNC START " + JSON.stringify(nextContext()));
     nextPrecheck();
-    nextProgram = new NextNC.Program({name: programName || "Fusion machining", units: unit === MM ? "mm" : "inch",
+    nextProgram = new NextNC.Program({name: programName || "Fusion machining", units: unit === MM ? "mm" : "inch", profileRevision: 2,
       machine: getSection(0).getType() === TYPE_MILLING ? "mill" : "lathe"});
   });
 }
@@ -324,9 +315,22 @@ function onSection() {
       name: hasParameter("operation-comment") ? getParameter("operation-comment") : (nextProgram.machine === "mill" ? "Milling " : "Turning ") + (getCurrentSectionId() + 1),
       tool: {number: tool.number, offset: nextToolOffset(currentSection, tool), description: tool.comment || ""},
       workOffset: currentSection.workOffset,
+      tolerance: hasParameter("operation:tolerance") ? {value: getParameter("operation:tolerance"), provenance: "fusion:operation:tolerance"} : {value: null, provenance: "missing"},
       start: nextPoint(getFramePosition(currentSection.getInitialPosition())),
       spindle: nextSpindle, coolant: nextCoolant(tool.coolant)
     });
+  });
+}
+function onMovement(value) {
+  nextGuard(function () {
+    nextNeedSection();
+    var entries = [[MOVEMENT_RAPID,"rapid"], [MOVEMENT_LEAD_IN,"lead-in"], [MOVEMENT_CUTTING,"cutting"],
+      [MOVEMENT_LEAD_OUT,"lead-out"], [MOVEMENT_LINK_TRANSITION,"link-transition"], [MOVEMENT_LINK_DIRECT,"link-direct"],
+      [MOVEMENT_RAMP_HELIX,"ramp-helix"], [MOVEMENT_RAMP_PROFILE,"ramp-profile"], [MOVEMENT_RAMP_ZIG_ZAG,"ramp-zig-zag"],
+      [MOVEMENT_RAMP,"ramp"], [MOVEMENT_PLUNGE,"plunge"], [MOVEMENT_PREDRILL,"predrill"],
+      [MOVEMENT_EXTENDED,"extended"], [MOVEMENT_REDUCED,"reduced"], [MOVEMENT_FINISH_CUTTING,"finish-cutting"], [MOVEMENT_HIGH_FEED,"high-feed"]];
+    for (var i=0;i<entries.length;i++) { if (entries[i][0] === value) { nextSection.setMovement(entries[i][1]); return; } }
+    throw new Error("Next-NC: unsupported Fusion movement class " + value + "; regenerate using a supported subtractive operation.");
   });
 }
 function onRapid(x, y, z) { nextGuard(function () { nextNeedSection(); nextSection.rapid([x, y, z]); }); }
@@ -345,20 +349,11 @@ function onCircular(clockwise, cx, cy, cz, x, y, z, feed) {
     if ((!milling && (plane !== PLANE_ZX || isHelical())) || [PLANE_XY, PLANE_ZX, PLANE_YZ].indexOf(plane) < 0) {
       throw new Error("Next-NC: only planar XZ arcs for turning and principal-plane arcs for XYZ milling are supported.");
     }
-    if (milling && isHelical()) {
-      if (!canLinearize()) { throw new Error("Next-NC: Fusion cannot linearize this milling helix."); }
-      var helixTolerance = nextArcTolerance();
-      linearize(helixTolerance);
-      nextFinishHelix(x, y, z, feed, helixTolerance);
-      ++nextLinearizedArcs;
-      nextLog("NEXTNC HELIX LINEARIZED " + JSON.stringify({operation: nextOperationLabel, tolerance: nextArcTolerance()}));
-      return;
-    }
     clockwise = nextBoolean(clockwise, "Fusion onCircular clockwise flag");
     var fullCircle = nextBoolean(isFullCircle(), "Fusion full-circle flag");
-    try { nextSection.arc([x, y, z], [cx, cy, cz], clockwise, nextFeed(feed), fullCircle, plane === PLANE_XY ? "XY" : plane === PLANE_YZ ? "YZ" : "XZ"); }
+    try { nextSection.circular([x, y, z], [cx, cy, cz], clockwise, nextFeed(feed), plane === PLANE_XY ? "XY" : plane === PLANE_YZ ? "YZ" : "XZ", getCircularSweep()); }
     catch (e) {
-      if (e.code !== "ARC_RADII" || fullCircle) { throw e; }
+      if (e.code !== "ARC_RADII" || fullCircle || isHelical()) { throw e; }
       var limit = nextArcTolerance(), remaining = limit - e.radialDifference;
       if (!(remaining > 0) || !canLinearize()) {
         throw new Error("Next-NC: arc endpoint radius difference " + e.radialDifference + " exceeds the available linearization budget " +
@@ -472,6 +467,7 @@ onSection = nextCallback("onSection", onSection);
 onRapid = nextCallback("onRapid", onRapid);
 onLinear = nextCallback("onLinear", onLinear);
 onCircular = nextCallback("onCircular", onCircular);
+onMovement = nextCallback("onMovement", onMovement);
 onDwell = nextCallback("onDwell", onDwell);
 onFeedMode = nextCallback("onFeedMode", onFeedMode);
 onSpindleSpeed = nextCallback("onSpindleSpeed", onSpindleSpeed);
