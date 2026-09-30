@@ -1,6 +1,6 @@
 # XYZ milling profile (introduced in v0.2.0)
 
-The post automatically selects `next-nc/milling-toolpath/0.1` for Fusion milling sections. It selects the unchanged turning profile for turning. Mixed machine types are rejected before motion; the section type is rechecked during export. No machine-type switch is added to post properties.
+The 0.4 development post automatically selects `next-nc/milling-toolpath/0.2` for Fusion milling sections. Turning uses its corresponding revision-2 profile. Mixed machine types are rejected before motion; the section type is rechecked during export. No machine-type switch is added to post properties. See [revision 2](native-profile-v2.md) for analytic sweeps, tolerance and movement semantics. The remaining revision-1 library examples below describe compatibility behavior, not the new CPS wire profile.
 
 Milling is fixed-axis XYZ with an unrotated +Z tool axis. The workplan's coordinate property is `WCS; XYZ Cartesian; fixed +Z tool axis; Fusion tool reference point`. Operations use `MILLING_TYPE_OPERATION` and milling technology/function descriptions. The rest of the ordered workplan/workingstep/toolpath graph and unit encoding follows [the existing format](format.md).
 
@@ -16,7 +16,7 @@ const p = new Program({machine: "mill", units: "mm"});
 
 The optional arc plane defaults to XY for a mill and XZ for a lathe. Milling RPM is required; CSS is rejected. There is no change to feed values, cutting depths, compensation or operation order.
 
-The Fusion adapter delegates helical approximation to `linearize()` at the tighter operation/post tolerance. All returned vertices are retained. It then requires the callback endpoint, allowing only coordinate-scaled floating-point roundoff (32 machine epsilons, capped per axis at one millionth of that tolerance); when needed it appends the exact supplied endpoint. Larger discrepancies fail. This endpoint allowance does not permit general path fitting or tolerance-based snapping. Native Autodesk bore samples exercise the roundoff case. Helices appear in the file as polylines, not additional unsupported STEP entities.
+The revision-2 Fusion adapter preserves helices analytically with explicit sweep, direction, axial rise and exact endpoints. Contradictory geometry fails. Native Autodesk bore samples exercise this path, including direct comparisons with the engine's circular callbacks. The old revision-1 CPS linearized helices; that behavior is no longer used by the native CPS.
 
 Since v0.3.0, Fusion expands fixed XYZ `drilling`, `counter-boring`, `chip-breaking` and `deep-drilling` into ordinary moves and dwells. The post preserves these callbacks and diagnoses failed/incomplete expansion; no STEP-NC or LinuxCNC canned cycle is emitted. See [integration and validation](translator-integration.md).
 

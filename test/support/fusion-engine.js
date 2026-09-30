@@ -5,7 +5,8 @@ function engine(overrides = {}) {
   const constants = ["MM", "IN", "CAPABILITY_MILLING", "TYPE_MILLING", "PLANE_YZ", "CAPABILITY_TURNING", "PLANE_ZX", "PLANE_XY", "TYPE_TURNING", "SPINDLE_PRIMARY",
     "SPINDLE_CONSTANT_SURFACE_SPEED", "SPINDLE_CONSTANT_SPINDLE_SPEED", "FEED_PER_MINUTE", "FEED_PER_REVOLUTION", "COOLANT_OFF", "COOLANT_FLOOD", "COOLANT_MIST", "COOLANT_THROUGH_TOOL",
     "RADIUS_COMPENSATION_OFF", "RADIUS_COMPENSATION_LEFT", "RADIUS_COMPENSATION_RIGHT", "COMMAND_START_SPINDLE", "COMMAND_COOLANT_ON", "COMMAND_COOLANT_OFF", "COMMAND_STOP_SPINDLE",
-    "COMMAND_SPINDLE_CLOCKWISE", "COMMAND_SPINDLE_COUNTERCLOCKWISE", "COMMAND_END"];
+    "COMMAND_SPINDLE_CLOCKWISE", "COMMAND_SPINDLE_COUNTERCLOCKWISE", "COMMAND_END",
+    ...["RAPID","LEAD_IN","CUTTING","LEAD_OUT","LINK_TRANSITION","LINK_DIRECT","RAMP_HELIX","RAMP_PROFILE","RAMP_ZIG_ZAG","RAMP","PLUNGE","PREDRILL","EXTENDED","REDUCED","FINISH_CUTTING","HIGH_FEED"].map(x=>"MOVEMENT_"+x)];
   const c = Object.fromEntries(constants.map((name, index) => [name, index + 1]));
   Object.assign(c, {
     setCodePage() {}, spatial: n => n, toRad: n => n * Math.PI / 180,
@@ -34,6 +35,18 @@ function engine(overrides = {}) {
   c.sections = [c.currentSection];
   Object.assign(c, overrides); vm.createContext(c);
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../../posts/next-nc.cps"), "utf8"), c);
+  // Supply the native engine's independent record sweep in callback-only tests.
+  // Dedicated tests may override getCircularSweep to exercise contradictory data.
+  const circular=c.onCircular;
+  c.onCircular=function (cw,cx,cy,cz,x,y,z,f) {
+    if (!overrides.getCircularSweep) {
+      const axes=c.getCircularPlane()===c.PLANE_XY ? [0,1] : c.getCircularPlane()===c.PLANE_ZX ? [2,0] : [1,2];
+      const [u,v]=axes, a=c.nextSection?.position || [0,0,0], b=[x,y,z], center=[cx,cy,cz], tau=2*Math.PI;
+      const start=Math.atan2(a[v]-center[v],a[u]-center[u]), end=Math.atan2(b[v]-center[v],b[u]-center[u]);
+      c.getCircularSweep=()=>c.isFullCircle() ? tau : (((cw ? start-end : end-start)%tau+tau)%tau || tau);
+    }
+    return circular(cw,cx,cy,cz,x,y,z,f);
+  };
   return {c, output, logs};
 }
 module.exports = {engine};

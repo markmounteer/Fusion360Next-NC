@@ -1,36 +1,29 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict");
-const {engine} = require("./support/fusion-engine");
+const {postedFixture} = require("./support/posted-fixture");
+const {Program} = require("../src/next-nc");
 const {consumer, checkTranslation} = require("./support/translator");
 const {inspect} = require("../lib/inspect");
 const api = consumer();
 for (const machine of ["lathe", "mill"]) for (const units of ["mm", "inch"]) {
-  test(`${machine} ${units}: actual CPS output passes the pinned translator's three execution audits`, () => {
-    const {c, output} = engine(); const mill = machine === "mill", y = mill ? 1 : 0;
-    c.unit = units === "mm" ? c.MM : c.IN;
-    c.tool.lengthOffset = 4;
-    c.currentSection.getType = () => mill ? c.TYPE_MILLING : c.TYPE_TURNING;
-    c.currentSection.getInitialPosition = () => ({x: 2, y, z: 0});
-    c.currentSection.feedMode = c.FEED_PER_MINUTE;
-    const first = c.currentSection, firstTool = c.tool;
-    first.getTool = () => firstTool;
-    const secondTool = {...firstTool, number: 2, lengthOffset: 7, compensationOffset: 8, clockwise: false, coolant: c.COOLANT_MIST};
-    const second = {...first, getTool: () => secondTool, parameters: {...first.parameters, "operation-comment": "Second tool"}};
-    if (!mill) {
-      firstTool.getSpindleMode = () => c.SPINDLE_CONSTANT_SURFACE_SPEED;
-      firstTool.surfaceSpeed = units === "mm" ? 80000 : 1200;
+  test(`${machine} ${units}: legacy consumer refuses native CPS semantics even under a forged old label`, () => {
+    const text=postedFixture(machine,units);
+    assert.equal(inspect(text).model.profileRevision,2);
+    for(const input of [text,text.replaceAll("toolpath/0.2","toolpath/0.1")]){
+      assert.throws(()=>api.readProgram(input),e=>e.code==="UNSUPPORTED_PROPERTY");
     }
-    c.sections = [first, second]; c.onOpen(); c.onSection();
-    c.onRapid(2, y, -1); c.onLinear(2, y, -2, 100);
-    c.isFullCircle = () => 1;
-    for (const [plane, center] of (mill ? [[c.PLANE_XY, [1, y, -2]], [c.PLANE_ZX, [1, y, -2]], [c.PLANE_YZ, [2, 0, -2]]] : [[c.PLANE_ZX, [1, 0, -2]]])) {
-      c.getCircularPlane = () => plane;
-      c.onCircular(0, ...center, 2, y, -2, 100);
-      c.onCircular(1, ...center, 2, y, -2, 100);
+  });
+  test(`${machine} ${units}: explicit revision-1 writer API retains the pinned translator's execution audits`, () => {
+    const mill=machine==="mill",y=mill?1:0,p=new Program({machine,units,profileRevision:1});
+    const initial={mode:mill?"rpm":"css",speed:mill?1200:units==="mm"?80000:1200,clockwise:true,...(mill?{}:{maximumRPM:1800})};
+    const s=p.addSection({name:"First",start:[2,y,0],tool:{number:1,offset:4},workOffset:1,spindle:initial,coolant:"flood"});
+    s.rapid([2,y,-1]);s.linear([2,y,-2],{value:100,mode:"perMinute"});
+    for(const [plane,center] of mill?[["XY",[1,y,-2]],["XZ",[1,y,-2]],["YZ",[2,0,-2]]]:[["XZ",[1,0,-2]]]){
+      s.arc([2,y,-2],center,false,{value:100,mode:"perMinute"},true,plane);s.arc([2,y,-2],center,true,{value:100,mode:"perMinute"},true,plane);
     }
-    c.onFeedMode(c.FEED_PER_REVOLUTION); c.onLinear(2, y, -3, 0.08); c.onDwell(0.25); c.onSectionEnd();
-    c.currentSection = second; c.tool = secondTool; c.onSection(); c.onSpindleSpeed(700); c.onLinear(2, y, -4, 50); c.onSectionEnd(); c.onClose();
-    const text = output.join("\n") + "\n", result = checkTranslation(text, api);
+    s.linear([2,y,-3],{value:0.08,mode:"perRevolution"});s.dwell(0.25);
+    p.addSection({name:"Second",start:[2,y,0],tool:{number:2,offset:mill?7:8},workOffset:1,spindle:{mode:"rpm",speed:700,clockwise:false},coolant:"mist"}).linear([2,y,-4],{value:50,mode:"perMinute"});
+    const text=p.toSTEP(),result=checkTranslation(text,api);
     assert.deepEqual(result.program.model, inspect(text).model);
     assert.match(result.out.gcode, /T2 M6/); assert.match(result.out.gcode, mill ? /G43 H7/ : /G43 H8/);
     assert.match(result.out.gcode, /G95 F0\.08/); assert.match(result.out.gcode, /G4 P0\.25/);

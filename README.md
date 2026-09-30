@@ -17,9 +17,9 @@ Download [posts/next-nc.cps](posts/next-nc.cps). It is a standalone file; Node.j
 
 See Autodesk's [Post Library instructions](https://help.autodesk.com/cloudhelp/ENU/Fusion-CAM/files/MFG-ADD-POST-PROCESSOR-TO-LIBRARY.htm).
 
-**0.3.0 adds Fusion-expanded milling drilling cycles and automated compatibility checks against LinuxCNCNext-NC v0.11.0.** Plain drilling, dwell drilling (`counter-boring`), chip breaking and deep drilling become explicit moves/dwells using Fusion's cycle settings. Existing turning/milling profiles and geometry semantics remain unchanged. No new post properties are added. [Translator integration and validation](docs/translator-integration.md).
+**The 0.4 development CPS emits native profile revision 2.** It preserves operation tolerance, movement class and analytic helices/multiple turns. This requires the new Rust consumer; the existing JavaScript G-code translator deliberately rejects the new profile. No native task executor is supplied yet. The versioned [native profile contract](docs/native-profile-v2.md) describes compatibility and validation. No new post properties are added.
 
-Milling uses a separate profile, tool length-offset identity, all three principal arc planes and tolerance-controlled helix linearization by Fusion. Its existing profile requires LinuxCNCNext-NC v0.5.0 or newer; v0.11.0 is the tested consumer baseline. [Milling contract](docs/milling.md).
+Milling uses a separate profile, tool length-offset identity, all three principal arc planes and analytic helical paths. Revision-1 library clients remain compatible with the earlier JavaScript consumer. [Milling contract](docs/milling.md).
 
 Prechecking runs before any toolpath is processed. It checks logical tool/WCS identifiers, initial coordinates, RPM, direction and supplied tolerance across selected sections, and continues diagnosing later sections if one section's metadata cannot be read. Successful prechecks log source facts as well. There are still zero post properties; the [translator](https://github.com/markmounteer/LinuxCNCNext-NC) owns optional checking against your existing LinuxCNC tool table. See the [research rationale](docs/research-review.md).
 
@@ -31,13 +31,13 @@ Exact geometry sharing and export comparison from 0.1.5 remain included. Every m
 | --- | --- |
 | Ordered turning or milling sections | Logical tools, Fusion work-offset numbers, tool-offset numbers, section entry points |
 | Rapid and cutting lines | All vertices preserved; adjacent moves with identical process state share a polyline |
-| Circular arcs | Lathe XZ; mill XY/XZ/YZ. Analytic circles and bounded trims, both directions, full circles |
-| Milling helices | Fusion linearizes with the tighter operation/post tolerance; all returned vertices retained |
+| Circular arcs | Lathe XZ; mill XY/XZ/YZ. Explicit analytic sweep/direction, full circles and multiple turns |
+| Milling helices | Analytic circular motion with independent signed axial rise and exact supplied endpoints |
 | Milling drilling | Fusion expands drilling, counter-boring, chip-breaking and deep-drilling; ordered moves, feeds and dwell retained |
 | Units | Millimetres or inches, explicit STEP units |
 | Feed | Length/minute or length/revolution |
 | Spindle | Constant RPM; lathe CSS with Fusion's maximum RPM |
-| Coolant and dwell | Off, flood, mist, through tool; dwell in seconds |
+| Coolant and dwell | Off, flood, mist; through-tool target incompatibility is diagnosed; dwell in seconds |
 
 There are **zero user-defined post properties**. Fusion supplies machining decisions. The controller consumer owns machine limits, tool changes, offset application, entry/retract policy, parking, overrides and motion planning.
 
@@ -104,7 +104,7 @@ The inspector is independent of the writer, requires Node.js, and is not embedde
 
 Edit `src/next-nc.js` and `src/fusion-adapter.js`, then run `npm run build`. Commit the generated `posts/next-nc.cps` too. CI checks that the source and post match, runs tests on Node 20/22/24, and checks the reproducible example.
 
-To exercise the writer in Autodesk's installed JavaScript runtime, set `AUTODESK_POST` to your `post.exe` and run `npm run test:autodesk`. Run `npm run test:posting` for actual engine posting against checksum-pinned Autodesk sample turning and milling inputs (downloaded to `.cache`, not redistributed). This verifies the compatibility gate, numeric arc flags, successful facing/profile output, arc rounding fallback, precheck/runtime rejection, milling facing/bore/toolchange, and native helix linearization. `npm run test:collector` checks the Windows log collector. These do not test the Fusion GUI or a machine.
+To exercise the writer in Autodesk's installed JavaScript runtime, set `AUTODESK_POST` to your `post.exe` and run `npm run test:autodesk`. Run `npm run test:posting` for actual engine posting against checksum-pinned Autodesk sample turning and milling inputs (downloaded to `.cache`, not redistributed). This verifies the compatibility gate, numeric arc flags, successful facing/profile output, arc rounding fallback, precheck/runtime rejection, milling facing/bore/toolchange, and preserved analytic helices. Retained circular callbacks are compared with decoded endpoints, centers, sweep, direction, rise and feed. `npm run test:collector` checks the Windows log collector. These do not test the Fusion GUI or a machine.
 
 ## License and provenance
 

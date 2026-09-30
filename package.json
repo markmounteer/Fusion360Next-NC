@@ -1,6 +1,6 @@
 {
   "name": "fusion360next-nc",
-  "version": "0.3.0",
+  "version": "0.4.0-dev.0",
   "description": "Fusion XZ turning and XYZ milling post with AP238 toolpath profiles",
   "license": "MIT",
   "main": "src/next-nc.js",
@@ -22,8 +22,9 @@
   "scripts": {
     "build": "node scripts/build.js",
     "check:build": "node scripts/build.js --check",
-    "test": "node --test test/writer.test.js test/fusion.test.js test/inspect.test.js test/milling.test.js test/geometry-diagnostics.test.js test/provenance.test.js test/cycles.test.js",
+    "test": "node --test test/writer.test.js test/fusion.test.js test/inspect.test.js test/milling.test.js test/geometry-diagnostics.test.js test/provenance.test.js test/cycles.test.js test/native-profile.test.js",
     "test:translator": "node --test test/translator.test.js",
+    "test:native-translator": "node --test test/native-translator.test.js",
     "inspect": "node scripts/inspect.js",
     "example": "node examples/turning.js",
     "test:autodesk": "node scripts/test-autodesk.js",
