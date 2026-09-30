@@ -64,3 +64,12 @@ The native test compares every retained circular callback's start, end, center,
 plane, direction, total sweep, axial rise and feed with the independently decoded
 output. Fixture tests cover both units, both senses, three planes and multiple
 turns; synthetic fixtures are not a physical machine clearance test.
+
+CI keeps two explicit interoperability lanes. `npm run test:translator` checks
+that the retained revision-1 writer API still passes the pinned legacy execution
+audits and that native CPS output is rejected, even with a forged old profile
+label. `npm run test:native-translator` compares current generated CPS callback
+output with the pinned Rust decoder in both machines and units. It requires
+`NEXTNC_NATIVE_ROOT` and the commit in `scripts/native-translator-baseline.json`.
+The native lane checks complete ordered source models and fingerprints; it does
+not claim native command compilation or execution.
