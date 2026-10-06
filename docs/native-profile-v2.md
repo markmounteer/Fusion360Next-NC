@@ -38,8 +38,14 @@ by the existing CAM/post linearization allowance. Helices never use that fallbac
 
 The pinned legacy JavaScript translator supports revision 1 only and must reject
 revision 2, including revision-2 properties smuggled under an old profile label.
-Its G-code path is not the native consumer. The Rust compiler is being implemented
-as the revision-1/revision-2 consumer; the task adapter remains a later stage.
+Its G-code path is not the native consumer. The implemented
+[Rust compiler](https://github.com/markmounteer/LinuxCNCNext-NC/blob/main/docs/native-compiler.md)
+accepts revision 1 and revision 2 and prepares audited native command bundles.
+The task adapter is implemented in the separate custom LinuxCNC controller
+repository. Standalone compiler commands do not move a machine; native execution
+requires that controller integration, compatible installed components and a
+reviewed setup. These implementations do not establish physical acceptance or
+general STEP-NC conformance.
 
 Requirements include linear, planar-arc, helix, multiple-turns, completion,
 spindle, tool-change, tool-offset, coolant, dwell, feed-per-revolution and CSS as
@@ -71,5 +77,9 @@ audits and that native CPS output is rejected, even with a forged old profile
 label. `npm run test:native-translator` compares current generated CPS callback
 output with the pinned Rust decoder in both machines and units. It requires
 `NEXTNC_NATIVE_ROOT` and the commit in `scripts/native-translator-baseline.json`.
-The native lane checks complete ordered source models and fingerprints; it does
-not claim native command compilation or execution.
+The native lane is pinned to Rust compiler main checkpoint
+`41e89aadee32d590bb12f8e82b03e051dbdbe5b5`. It checks complete ordered source
+models and fingerprints for lathe/mill in mm/inch. Its use of `inspect` does not
+test native command compilation or execution, even though those implementations
+exist separately. The commit pin and CI checkout must change together when
+updating this compatibility checkpoint.
