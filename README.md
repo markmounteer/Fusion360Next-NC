@@ -4,7 +4,7 @@
 
 An experimental Autodesk Fusion post processor and JavaScript library for **toolpath-level STEP-NC/AP238**, for a single-spindle XZ lathe or fixed-axis XYZ mill.
 
-**Next-NC is the project name.** The output is an ISO 10303-21 text file using the AP238 `INTEGRATED_CNC_SCHEMA`, with a small, documented Next-NC execution profile. It is not G-code, and stock LinuxCNC cannot execute it directly. The separate [LinuxCNCNext-NC translator](https://github.com/markmounteer/LinuxCNCNext-NC) provides an experimental G-code input-filter bridge with explicit machine/setup plans. A native STEP-NC interpreter remains unimplemented. AP238 conformance and third-party interoperability have not been certified or independently validated.
+**Next-NC is the project name.** The output is an ISO 10303-21 text file using the AP238 `INTEGRATED_CNC_SCHEMA`, with a small, documented Next-NC execution profile. It is not G-code, and stock LinuxCNC cannot execute it directly. The separate [LinuxCNCNext-NC translator](https://github.com/markmounteer/LinuxCNCNext-NC) supplies a Rust native job compiler with explicit machine/setup plans, alongside the earlier revision-1 G-code bridge. Native task execution is implemented in the separate custom LinuxCNC controller repository; installing this post or the standalone compiler does not install or enable that controller integration. AP238 conformance and third-party interoperability have not been certified or independently validated.
 
 ## Get the post
 
@@ -17,7 +17,7 @@ Download [posts/next-nc.cps](posts/next-nc.cps). It is a standalone file; Node.j
 
 See Autodesk's [Post Library instructions](https://help.autodesk.com/cloudhelp/ENU/Fusion-CAM/files/MFG-ADD-POST-PROCESSOR-TO-LIBRARY.htm).
 
-**The 0.4 development CPS emits native profile revision 2.** It preserves operation tolerance, movement class and analytic helices/multiple turns. This requires the new Rust consumer; the existing JavaScript G-code translator deliberately rejects the new profile. No native task executor is supplied yet. The versioned [native profile contract](docs/native-profile-v2.md) describes compatibility and validation. No new post properties are added.
+**The 0.4 development CPS emits native profile revision 2.** It preserves operation tolerance, movement class and analytic helices/multiple turns. This requires the Rust consumer; the existing JavaScript G-code translator deliberately rejects the new profile. The [Rust compiler](https://github.com/markmounteer/LinuxCNCNext-NC/blob/main/docs/native-compiler.md) prepares native bundles without generating G-code. Execution requires the separately installed custom controller, its compatibility checks and a reviewed machine setup; physical machine acceptance remains separate. The versioned [native profile contract](docs/native-profile-v2.md) describes compatibility and validation. No new post properties are added.
 
 Milling uses a separate profile, tool length-offset identity, all three principal arc planes and analytic helical paths. Revision-1 library clients remain compatible with the earlier JavaScript consumer. [Milling contract](docs/milling.md).
 

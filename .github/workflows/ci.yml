@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: markmounteer/LinuxCNCNext-NC
-          ref: 34e586f66b4f17de8edd0ed9514a428ab7905db3
+          ref: 41e89aadee32d590bb12f8e82b03e051dbdbe5b5
           path: .cache/native-translator
           persist-credentials: false
       - run: rustup toolchain install 1.96.1 --profile minimal
