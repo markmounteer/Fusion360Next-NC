@@ -1,0 +1,5 @@
+{
+  "repository": "https://github.com/markmounteer/LinuxCNCNext-NC",
+  "commit": "34e586f66b4f17de8edd0ed9514a428ab7905db3",
+  "scope": "Complete source decoder only; native command compilation and execution remain pending"
+}

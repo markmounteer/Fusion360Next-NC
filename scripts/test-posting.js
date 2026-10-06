@@ -43,7 +43,15 @@ async function main() {
     assert.equal(crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"), checksum);
   }
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "next-nc-posting-"));
-  const source = fs.readFileSync(path.join(root, "posts/next-nc.cps"), "utf8");
+  const source = fs.readFileSync(path.join(root, "posts/next-nc.cps"), "utf8") + `
+var stage1Circular = onCircular;
+onCircular = function(cw,cx,cy,cz,x,y,z,f) {
+  var p = getCurrentPosition(), plane = getCircularPlane();
+  log("TEST NATIVE CIRCULAR " + JSON.stringify({record:getCurrentRecordId(), start:[p.x,p.y,p.z],end:[x,y,z],center:[cx,cy,cz],
+    plane:plane===PLANE_XY?"XY":plane===PLANE_YZ?"YZ":"XZ",clockwise:!!cw,sweepRadians:getCircularSweep(),feed:f}));
+  stage1Circular.apply(this,arguments);
+};
+`;
   const bridge = process.env.LINUXCNC_NEXTNC ? require("../test/support/translator") : null;
   const consumer = bridge ? bridge.consumer() : null;
   if (!bridge) console.log("NOT CHECKED: translator integration; set LINUXCNC_NEXTNC to the pinned checkout to enable it.");
@@ -57,9 +65,31 @@ async function main() {
     const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
     assert.equal(result.status, expected, log + result.stdout + result.stderr);
     const output = fs.existsSync(out) ? fs.readFileSync(out, "utf8") : "";
+    if (expected===0) {
+      const rejected = new Set([...log.matchAll(/NEXTNC ARC LINEARIZED (\{[^\r\n]+\})/g)].map(m=>JSON.parse(m[1]).record));
+      const sourceArcs = [...log.matchAll(/TEST NATIVE CIRCULAR (\{[^\r\n]+\})/g)].map(m=>JSON.parse(m[1])).filter(a=>!rejected.has(a.record));
+      const arcs = inspect(output).model.sections.flatMap(s=>s.paths).filter(p=>p.kind==="circular");
+      assert.equal(arcs.length,sourceArcs.length,"Every retained native circular callback must have one analytic output use");
+      arcs.forEach((p,i)=>{
+        const a=sourceArcs[i], n={XY:2,XZ:1,YZ:0}[a.plane], center=[...a.center]; center[n]=a.start[n];
+        for (const key of ["start","end","plane","clockwise","sweepRadians"]) assert.deepEqual(p[key],a[key],"native circular "+key);
+        assert.deepEqual(p.center,center); assert.equal(p.axialRise,a.end[n]-a.start[n]); assert.equal(p.feed.value,a.feed);
+      });
+    }
+    if (process.env.NEXTNC_POST_EVIDENCE) {
+      const evidence = path.resolve(process.env.NEXTNC_POST_EVIDENCE); fs.mkdirSync(evidence,{recursive:true});
+      fs.writeFileSync(path.join(evidence,name+".log"),log);
+      fs.writeFileSync(path.join(evidence,name+".stpnc"),output);
+      if(expected===0) fs.writeFileSync(path.join(evidence,name+".inspection.json"),JSON.stringify(inspect(output),null,2)+"\n");
+    }
     if (expected === 0 && bridge) {
-      const checked = bridge.checkTranslation(output, consumer);
-      console.log(`PASS: ${name}: translator completeness, policy and serialization audits (${checked.out.report.gcodeLines} lines).`);
+      if (inspect(output).model.profileRevision===2) {
+        assert.throws(()=>consumer.readProgram(output),/unsupported|Unsupported/,"Legacy consumer must reject revision-2 semantics");
+        console.log(`PASS: ${name}: pinned legacy consumer rejects revision 2.`);
+      } else {
+        const checked = bridge.checkTranslation(output, consumer);
+        console.log(`PASS: ${name}: translator completeness, policy and serialization audits (${checked.out.report.gcodeLines} lines).`);
+      }
     }
     return {log, output};
   }
@@ -101,7 +131,10 @@ onDwell = function (t) { log("TEST EXPANDED " + JSON.stringify({kind:"dwell",sec
       const result = post(fixture, source, fixture, 0), decoded = inspect(result.output);
       assert.equal(decoded.report.machine, "mill");
       assert.ok(decoded.report.paths > 0); assert.ok(decoded.report.bounds.max[1] !== decoded.report.bounds.min[1]);
-      if (fixture === "mill-bore") assert.match(result.log, /NEXTNC HELIX LINEARIZED/);
+      if (fixture === "mill-bore") {
+        assert.ok(decoded.model.sections.flatMap(s=>s.paths).some(p=>p.kind==="circular" && p.axialRise!==0));
+        assert.doesNotMatch(result.log,/NEXTNC HELIX LINEARIZED/);
+      }
       console.log(`PASS: actual Autodesk ${fixture}: ${decoded.report.sections} sections, ${decoded.report.paths} paths.`);
     }
     const old = post("bad-version", source.replace('version = "1.0";', "version = NextNC.version;"), "face", 500);
@@ -127,9 +160,8 @@ onDwell = function (t) { log("TEST EXPANDED " + JSON.stringify({kind:"dwell",sec
     const profileDoc = parse(profile.output);
     const inspected = inspect(profile.output);
     assert.equal(inspected.report.curveDefinitions.arcs, profileDoc.all("TRIMMED_CURVE").length);
-    assert.ok(profileDoc.all("CIRCLE").length > 0);
-    assert.ok(profileDoc.all("TRIMMED_CURVE").some(e => e.args[4].symbol === ".T."));
-    assert.ok(profileDoc.all("TRIMMED_CURVE").every(e => e.args[4].symbol === ".T."));
+    const circles=inspected.model.sections.flatMap(s=>s.paths).filter(p=>p.kind==="circular");
+    assert.ok(circles.length>0); assert.ok(circles.every(p=>p.clockwise===false));
     const arcCount = (profile.log.match(/TEST ARC FLAG number 0/g) || []).length;
     const linearizedCount = (profile.log.match(/NEXTNC ARC LINEARIZED/g) || []).length;
     assert.equal(inspected.report.arcs, arcCount - linearizedCount);

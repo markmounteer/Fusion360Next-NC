@@ -4,9 +4,12 @@
  */
 var NextNC = (function () {
   "use strict";
-  var VERSION = "0.3.0";
+  var VERSION = "0.4.0-dev.0";
   var PROFILE = "next-nc/turning-toolpath/0.1";
   var MILL_PROFILE = "next-nc/milling-toolpath/0.1";
+  var NATIVE_PROFILE = "next-nc/turning-toolpath/0.2";
+  var NATIVE_MILL_PROFILE = "next-nc/milling-toolpath/0.2";
+  var movements = ["unspecified", "rapid", "cutting", "finish-cutting", "lead-in", "lead-out", "link-transition", "link-direct", "ramp-helix", "ramp-profile", "ramp-zig-zag", "ramp", "plunge", "predrill", "extended", "reduced", "high-feed"];
   var planes = {XY: {normal: [0, 0, 1], axes: [0, 1], fixed: 2}, XZ: {normal: [0, 1, 0], axes: [0, 2], fixed: 1}, YZ: {normal: [1, 0, 0], axes: [1, 2], fixed: 0}};
   function requireValue(ok, message) { if (!ok) { throw new Error("Next-NC: " + message); } }
   function finite(n, label) {
@@ -39,13 +42,19 @@ var NextNC = (function () {
   function stateKey(s, f) {
     return [s.mode, s.speed, s.maximumRPM || 0, s.clockwise, f ? f.mode : "", f ? f.value : ""].join("|");
   }
-  function Section(spec, machine) {
+  function Section(spec, machine, revision) {
     this.machine = machine;
+    this.revision = revision;
     requireValue(spec && spec.tool, "section and tool are required");
     this.name = String(spec.name || (machine === "mill" ? "Milling" : "Turning"));
     this.tool = {number: integer(spec.tool.number, "tool number", 1),
       offset: integer(spec.tool.offset, "tool offset", 0), description: String(spec.tool.description || "")};
     this.workOffset = integer(spec.workOffset, "Fusion work offset", 0);
+    this.tolerance = spec.tolerance || {value: null, provenance: "missing"};
+    requireValue(this.tolerance.provenance === "missing" ? this.tolerance.value === null :
+      ["fusion:operation:tolerance", "source-declared"].indexOf(this.tolerance.provenance) >= 0 && positive(this.tolerance.value, "operation tolerance"), "invalid tolerance provenance");
+    this.tolerance = {value: this.tolerance.value, provenance: this.tolerance.provenance};
+    this.movement = "unspecified";
     this.start = point(spec.start, machine);
     this.position = this.start.slice();
     this.setSpindle(spec.spindle);
@@ -58,10 +67,14 @@ var NextNC = (function () {
     var spindle = copySpindle(s); requireValue(this.machine !== "mill" || spindle.mode === "rpm", "XYZ milling requires constant RPM"); this.spindle = spindle;
   };
   Section.prototype.setCoolant = function (c) { this.coolant = coolant(c); };
+  Section.prototype.setMovement = function (value) {
+    requireValue(movements.indexOf(value) >= 0, "unsupported movement class: " + value); this.movement = value;
+  };
   Section.prototype.append = function (path, f) {
     path.spindle = copySpindle(this.spindle); path.coolant = this.coolant;
     path.feed = f ? feed(f) : null;
-    path.key = path.kind + "|" + path.coolant + "|" + stateKey(path.spindle, path.feed);
+    if (this.revision === 2) { path.movement = path.kind === "rapid" ? "rapid" : this.movement; }
+    path.key = path.kind + "|" + path.coolant + "|" + stateKey(path.spindle, path.feed) + "|" + (path.movement || "");
     var previous = this.paths[this.paths.length - 1];
     // Compact only consecutive linear moves with identical process state.
     // Every intermediate vertex is preserved; this is not geometric smoothing.
@@ -99,18 +112,60 @@ var NextNC = (function () {
     this.position = end;
   };
   Section.prototype.dwell = function (seconds) { this.append({kind: "dwell", seconds: positive(seconds, "dwell")}); };
+  Section.prototype.circular = function (end, center, clockwise, f, plane, sweep) {
+    requireValue(this.revision === 2, "analytic sweeps require profile revision 2");
+    end = point(end, this.machine); center = point(center, this.machine); f = feed(f);
+    requireValue(Object.prototype.hasOwnProperty.call(planes, plane) && (this.machine === "mill" || plane === "XZ"), "unsupported arc plane");
+    requireValue(typeof clockwise === "boolean", "arc direction must be explicit");
+    positive(sweep, "circular sweep"); requireValue(sweep <= 20000 * Math.PI, "circular sweep exceeds 10000-turn resource bound");
+    var frame = planes[plane], u = frame.axes[0], v = frame.axes[1], n = frame.fixed, sign = plane === "XZ" ? -1 : 1;
+    var start = this.position, radius = Math.sqrt(Math.pow(start[u] - center[u], 2) + Math.pow(start[v] - center[v], 2));
+    positive(radius, "arc radius");
+    // The axis point is canonicalized only along its unconstrained axial line.
+    // No in-plane center, endpoint or radius is changed.
+    center[n] = start[n];
+    var endRadius = Math.sqrt(Math.pow(end[u] - center[u], 2) + Math.pow(end[v] - center[v], 2));
+    var threshold = Math.max(1e-7, radius * 1e-6);
+    if (Math.abs(endRadius - radius) > threshold) {
+      var e = new Error("Next-NC: arc endpoints have different radii"); e.code = "ARC_RADII"; e.radialDifference = Math.abs(endRadius - radius); throw e;
+    }
+    var angle = Math.atan2(sign * (start[v] - center[v]), start[u] - center[u]) + (clockwise ? -sweep : sweep);
+    requireValue(Math.abs(center[u] + radius * Math.cos(angle) - end[u]) <= threshold &&
+      Math.abs(center[v] + sign * radius * Math.sin(angle) - end[v]) <= threshold, "circular sweep disagrees with supplied endpoint");
+    this.append({kind: "circular", start: start, end: end, center: center, radius: radius, plane: plane,
+      clockwise: clockwise, sweepRadians: sweep, axialRise: end[n] - start[n]}, f);
+    this.position = end;
+  };
   function Program(options) {
     options = options || {};
     requireValue(options.units === "mm" || options.units === "inch", "units must be mm or inch");
     this.machine = options.machine || "lathe";
     requireValue(this.machine === "lathe" || this.machine === "mill", "machine must be lathe or mill");
-    this.profile = this.machine === "mill" ? MILL_PROFILE : PROFILE;
+    this.profileRevision = options.profileRevision === undefined ? 1 : options.profileRevision;
+    requireValue(this.profileRevision === 1 || this.profileRevision === 2, "unsupported profile revision");
+    this.profile = this.profileRevision === 2 ? (this.machine === "mill" ? NATIVE_MILL_PROFILE : NATIVE_PROFILE) : (this.machine === "mill" ? MILL_PROFILE : PROFILE);
     this.units = options.units; this.name = String(options.name || "Next-NC program");
     this.timestamp = options.timestamp || new Date().toISOString();
     requireValue(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(this.timestamp), "timestamp must be UTC ISO 8601");
     this.sections = [];
   }
-  Program.prototype.addSection = function (spec) { var s = new Section(spec, this.machine); this.sections.push(s); return s; };
+  Program.prototype.addSection = function (spec) { var s = new Section(spec, this.machine, this.profileRevision); this.sections.push(s); return s; };
+  Program.prototype.requiredCapabilities = function () {
+    var result = ["completion", "spindle", "tool-change", "tool-offset", "coolant"];
+    function add(value) { if (result.indexOf(value) < 0) { result.push(value); } }
+    this.sections.forEach(function (s) {
+      if (s.initialSpindle.mode === "css") { add("css"); }
+      if (s.initialCoolant === "through tool") { add("coolant-through-tool"); }
+      s.paths.forEach(function (p) {
+        add(p.kind === "dwell" ? "dwell" : p.kind === "arc" || p.kind === "circular" ? "planar-arc" : "linear");
+        if (p.axialRise) { add("helix"); }
+        if (p.sweepRadians > 2 * Math.PI) { add("multiple-turns"); }
+        if (p.feed && p.feed.mode === "perRevolution") { add("feed-per-revolution"); }
+        if (p.spindle.mode === "css") { add("css"); }
+        if (p.coolant === "through tool") { add("coolant-through-tool"); }
+      });
+    }); return result.sort();
+  };
   function real(n) {
     finite(n, "STEP real");
     var result = (n === 0 ? "0" : String(n)).toUpperCase();
@@ -247,12 +302,16 @@ var NextNC = (function () {
     this.rel("MACHINING_TECHNOLOGY_RELATIONSHIP", tp, this.technology(path.spindle, path.feed));
     this.rel("MACHINING_FUNCTIONS_RELATIONSHIP", tp, this.functions(path.coolant));
     this.textProperty(tp, "priority", "required");
+    if (path.movement !== undefined) { this.textProperty(tp, "next-nc movement", path.movement); }
     if (path.kind === "dwell") {
       var time = this.add("MEASURE_REPRESENTATION_ITEM", [str("dwell"), "TIME_MEASURE(" + real(path.seconds) + ")", this.second]);
       this.property(tp, "dwell", this.rep(null, "", [time]));
     } else {
       this.textProperty(tp, "trajectory type", "trajectory path"); this.textProperty(tp, "direction", "beginning to end");
-      this.property(tp, "basic curve", this.rep(null, "", [this.curve(path)], this.context));
+      if (path.kind === "circular") {
+        this.textProperty(tp, "next-nc circular motion", JSON.stringify({start: path.start, end: path.end, center: path.center,
+          plane: path.plane, clockwise: path.clockwise, sweepRadians: path.sweepRadians, axialRise: path.axialRise}));
+      } else { this.property(tp, "basic curve", this.rep(null, "", [this.curve(path)], this.context)); }
       if (path.kind === "rapid") {
         this.property(tp, "speed profile", this.rep("MACHINING_TOOLPATH_SPEED_PROFILE_REPRESENTATION", "", [this.textItem("", "rapid")]));
       }
@@ -270,6 +329,7 @@ var NextNC = (function () {
     var process = this.add("PRODUCT_DEFINITION_PROCESS", [str("machining"), "''", workplan, "''"]);
     this.add("PROCESS_PRODUCT_ASSOCIATION", ["''", "''", projectDef, process]);
     this.textProperty(workplan, "next-nc profile", program.profile);
+    if (program.profileRevision === 2) { this.textProperty(workplan, "next-nc required capabilities", JSON.stringify(program.requiredCapabilities())); }
     this.textProperty(workplan, "next-nc coordinates", program.machine === "mill" ? "WCS; XYZ Cartesian; fixed +Z tool axis; Fusion tool reference point" : "WCS; X radius; Y zero; Z axial; Fusion tool reference point");
     var part = this.add("PRODUCT", [str("workpiece"), str("Toolpath-only workpiece; geometry not supplied"), "$", list([context])]);
     var partFormation = this.add("PRODUCT_DEFINITION_FORMATION", ["''", "''", part]);
@@ -295,6 +355,7 @@ var NextNC = (function () {
     this.add("MACHINING_TOOL", [str(section.tool.number), str(section.tool.description), list([operation]), toolType]);
     this.textProperty(operation, "next-nc tool offset", String(section.tool.offset));
     this.textProperty(operation, "next-nc work offset", String(section.workOffset));
+    if (section.revision === 2) { this.textProperty(operation, "next-nc tolerance", JSON.stringify(section.tolerance)); }
     this.property(operation, "next-nc entry point", this.rep(null, "", [this.point(section.start)], this.context));
     this.rel("MACHINING_TECHNOLOGY_RELATIONSHIP", operation, this.technology(section.initialSpindle, null));
     this.rel("MACHINING_FUNCTIONS_RELATIONSHIP", operation, this.functions(section.initialCoolant));
@@ -309,7 +370,7 @@ var NextNC = (function () {
     for (i = 0; i < this.sections.length; ++i) {
       for (var j = 0; j < this.sections[i].paths.length; ++j) {
         var path = this.sections[i].paths[j]; ++this.lastExport.paths;
-        if (path.kind === "arc") { ++this.lastExport.arcs; }
+        if (path.kind === "arc" || path.kind === "circular") { ++this.lastExport.arcs; }
         else if (path.kind === "dwell") { ++this.lastExport.dwells; }
         else { this.lastExport[path.kind === "rapid" ? "rapidSegments" : "cuttingSegments"] += path.points.length - 1; }
       }
@@ -346,8 +407,8 @@ minimumChordLength = spatial(0.001, MM);
 minimumCircularRadius = spatial(0.001, MM);
 maximumCircularRadius = spatial(100000, MM);
 minimumCircularSweep = toRad(0.001);
-maximumCircularSweep = 2 * Math.PI;
-allowHelicalMoves = true; // Milling helices are linearized by Fusion at the operation tolerance.
+maximumCircularSweep = 2000 * Math.PI;
+allowHelicalMoves = true; // Revision 2 preserves native analytic helices.
 allowSpiralMoves = false;
 allowedCircularPlanes = (1 << PLANE_ZX) | (1 << PLANE_XY) | (1 << PLANE_YZ);
 
@@ -548,6 +609,9 @@ function nextSectionIssues(section) {
   if ([COOLANT_OFF, COOLANT_FLOOD, COOLANT_MIST, COOLANT_THROUGH_TOOL].indexOf(sectionTool.coolant) < 0) {
     issues.push("[COOLANT] Unsupported coolant selection. Supported modes are Off, Flood, Mist, and Through tool.");
   }
+  if (sectionTool.coolant === COOLANT_THROUGH_TOOL) {
+    issues.push("[COOLANT_CAPABILITY] Through-tool coolant requires a controller-owned coolant-through-tool capability, which the current Next-NC motion target does not implement. Review this operation's Tool > Coolant setting and machine plumbing. Select another mode only if it is correct for this cut; the post will not substitute Flood or Mist.");
+  }
   return issues;
 }
 function nextPrecheck() {
@@ -600,18 +664,6 @@ function nextArcTolerance() {
   }
   return limit;
 }
-function nextFinishHelix(x, y, z, feed, limit) {
-  var end = [x, y, z], position = nextSection.position, differs = false;
-  for (var i = 0; i < 3; ++i) {
-    // Native linearize() may end a few floating-point ulps from the callback
-    // endpoint. Keep its vertices, then retain the exact supplied endpoint too.
-    // This allowance is bounded far below the CAM tolerance, not a snap radius.
-    var roundoff = Math.min(limit * 1e-6, Math.max(1, Math.abs(end[i]), Math.abs(position[i])) * 32 * 2.220446049250313e-16);
-    if (Math.abs(position[i] - end[i]) > roundoff) { throw new Error("Next-NC: Fusion helix linearization did not reach its endpoint. Expected " + JSON.stringify(end) + "; received " + JSON.stringify(position) + "."); }
-    differs = differs || position[i] !== end[i];
-  }
-  if (differs) { nextSection.linear(end, nextFeed(feed)); }
-}
 function nextFeed(value) { return {value: value, mode: nextFeedMode}; }
 function nextSetFeedMode(mode) {
   if (mode === FEED_PER_MINUTE) { nextFeedMode = "perMinute"; }
@@ -631,7 +683,7 @@ function onOpen() {
     nextStartedUTC = new Date().toISOString();
     nextLog("NEXTNC START " + JSON.stringify(nextContext()));
     nextPrecheck();
-    nextProgram = new NextNC.Program({name: programName || "Fusion machining", units: unit === MM ? "mm" : "inch",
+    nextProgram = new NextNC.Program({name: programName || "Fusion machining", units: unit === MM ? "mm" : "inch", profileRevision: 2,
       machine: getSection(0).getType() === TYPE_MILLING ? "mill" : "lathe"});
   });
 }
@@ -651,9 +703,22 @@ function onSection() {
       name: hasParameter("operation-comment") ? getParameter("operation-comment") : (nextProgram.machine === "mill" ? "Milling " : "Turning ") + (getCurrentSectionId() + 1),
       tool: {number: tool.number, offset: nextToolOffset(currentSection, tool), description: tool.comment || ""},
       workOffset: currentSection.workOffset,
+      tolerance: hasParameter("operation:tolerance") ? {value: getParameter("operation:tolerance"), provenance: "fusion:operation:tolerance"} : {value: null, provenance: "missing"},
       start: nextPoint(getFramePosition(currentSection.getInitialPosition())),
       spindle: nextSpindle, coolant: nextCoolant(tool.coolant)
     });
+  });
+}
+function onMovement(value) {
+  nextGuard(function () {
+    nextNeedSection();
+    var entries = [[MOVEMENT_RAPID,"rapid"], [MOVEMENT_LEAD_IN,"lead-in"], [MOVEMENT_CUTTING,"cutting"],
+      [MOVEMENT_LEAD_OUT,"lead-out"], [MOVEMENT_LINK_TRANSITION,"link-transition"], [MOVEMENT_LINK_DIRECT,"link-direct"],
+      [MOVEMENT_RAMP_HELIX,"ramp-helix"], [MOVEMENT_RAMP_PROFILE,"ramp-profile"], [MOVEMENT_RAMP_ZIG_ZAG,"ramp-zig-zag"],
+      [MOVEMENT_RAMP,"ramp"], [MOVEMENT_PLUNGE,"plunge"], [MOVEMENT_PREDRILL,"predrill"],
+      [MOVEMENT_EXTENDED,"extended"], [MOVEMENT_REDUCED,"reduced"], [MOVEMENT_FINISH_CUTTING,"finish-cutting"], [MOVEMENT_HIGH_FEED,"high-feed"]];
+    for (var i=0;i<entries.length;i++) { if (entries[i][0] === value) { nextSection.setMovement(entries[i][1]); return; } }
+    throw new Error("Next-NC: unsupported Fusion movement class " + value + "; regenerate using a supported subtractive operation.");
   });
 }
 function onRapid(x, y, z) { nextGuard(function () { nextNeedSection(); nextSection.rapid([x, y, z]); }); }
@@ -672,20 +737,11 @@ function onCircular(clockwise, cx, cy, cz, x, y, z, feed) {
     if ((!milling && (plane !== PLANE_ZX || isHelical())) || [PLANE_XY, PLANE_ZX, PLANE_YZ].indexOf(plane) < 0) {
       throw new Error("Next-NC: only planar XZ arcs for turning and principal-plane arcs for XYZ milling are supported.");
     }
-    if (milling && isHelical()) {
-      if (!canLinearize()) { throw new Error("Next-NC: Fusion cannot linearize this milling helix."); }
-      var helixTolerance = nextArcTolerance();
-      linearize(helixTolerance);
-      nextFinishHelix(x, y, z, feed, helixTolerance);
-      ++nextLinearizedArcs;
-      nextLog("NEXTNC HELIX LINEARIZED " + JSON.stringify({operation: nextOperationLabel, tolerance: nextArcTolerance()}));
-      return;
-    }
     clockwise = nextBoolean(clockwise, "Fusion onCircular clockwise flag");
     var fullCircle = nextBoolean(isFullCircle(), "Fusion full-circle flag");
-    try { nextSection.arc([x, y, z], [cx, cy, cz], clockwise, nextFeed(feed), fullCircle, plane === PLANE_XY ? "XY" : plane === PLANE_YZ ? "YZ" : "XZ"); }
+    try { nextSection.circular([x, y, z], [cx, cy, cz], clockwise, nextFeed(feed), plane === PLANE_XY ? "XY" : plane === PLANE_YZ ? "YZ" : "XZ", getCircularSweep()); }
     catch (e) {
-      if (e.code !== "ARC_RADII" || fullCircle) { throw e; }
+      if (e.code !== "ARC_RADII" || fullCircle || isHelical()) { throw e; }
       var limit = nextArcTolerance(), remaining = limit - e.radialDifference;
       if (!(remaining > 0) || !canLinearize()) {
         throw new Error("Next-NC: arc endpoint radius difference " + e.radialDifference + " exceeds the available linearization budget " +
@@ -799,6 +855,7 @@ onSection = nextCallback("onSection", onSection);
 onRapid = nextCallback("onRapid", onRapid);
 onLinear = nextCallback("onLinear", onLinear);
 onCircular = nextCallback("onCircular", onCircular);
+onMovement = nextCallback("onMovement", onMovement);
 onDwell = nextCallback("onDwell", onDwell);
 onFeedMode = nextCallback("onFeedMode", onFeedMode);
 onSpindleSpeed = nextCallback("onSpindleSpeed", onSpindleSpeed);
